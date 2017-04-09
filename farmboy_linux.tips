@@ -1,0 +1,43 @@
+In Opera, you can enable the Ad blocker: Menu, Settings, Block ads.
+---
+If you use some site still requiring Flash, in Opera type opera://plugins into the address bar and check "Always allowed to run" in the Adobe Flash Player box.
+--
+To disable auto suspend when closing your laptop lid:
+
+# ed /etc/systemd/logind.conf <<EOS
+,s/^#\(HandleSuspendKey=)suspend/\1ignore/
+wq
+EOS
+---
+If you just want a quick volume slider control in the taskbar, a good choice
+and alternativo to pasystray is
+$ yaourt --noconfirm -S volctl
+---
+To share some folders with Windows:
+# pacman -S
+# cp /etc/samba/smb.conf.default into /etc/samba/smb.conf
+
+set the workgroup and configure a share based on the examples. Make sure
+services smbd and nmbd are running:
+
+# systemctl start smbd
+# systemctl start nmbd
+
+and optionally enabled at boot:
+
+# systemctl enable smbd
+# systemctl enable nmbd
+
+If a share is using a username and password, remember to create
+the samba_user with:
+
+# smbpassw -a samba_user
+
+To share an external USB drive you need to add this to the share definition:
+
+force user = user_the_driver_is_mounted_under
+---
+Some Windows program may run if you install wine-mono wine_gecko winetricks.
+For wine on 64-bit you will need to enable the multilib repository in
+/etc/pacman.conf. Depending on the software you will need to install other
+linux packages, es. lib32-mpg123.
