@@ -99,6 +99,7 @@ bak etc/fstab
 run genfstab -U /mnt '>>' etc/fstab
 run ed etc/fstab <<EOS
 ,s/^\/mnt//
+,s/relatime/noatime/g
 wq
 EOS
 
@@ -180,8 +181,50 @@ run cat '>>' etc/pacman.conf <<EOS
 SigLevel = Never
 Server = http://repo.archlinux.fr/\$arch
 EOS
-run pacman-chroot -Sy openssh ed bash-completion zip unzip \
+run pacman-chroot -Sy crda openssh ed bash-completion zip unzip \
   git abs yaourt vim alsa-utils unrar timidity++ soundfont-fluid
+
+if [ "$LAMP" = true ]; then
+  run pacman-chroot -S apache php php-apache mariadb
+  run chmod o+x 'home/$NORMALUSER'
+  run mkdir 'home/$NORMALUSER/public_html'
+  run chown '$NORMALUSER:$NORMALUSER' 'home/$NORMALUSER/public_html'
+  run chmod o+rx 'home/$NORMALUSER/public_html'
+  bak etc/httpd/conf/httpd.conf
+  run ed etc/httpd/conf/httpd.conf <<EOS
+,s/^\(LoadModule mpm_event_module modules\/mod_mpm_event\.so\)/#\1/
+,s/^#\(LoadModule mpm_prefork_module modules\/mod_mpm_prefork\.so\)/\1/
+/^#LoadModule rewrite_module/
+a
+LoadModule php7_module modules/libphp7.so
+AddHandler php7-script php
+.
+/^Include conf\/extra\/proxy-html\.conf/
+
+a
+
+Include conf/extra/php7_module.conf
+.
+wq
+EOS
+
+  bak etc/php/php.ini
+  run ed etc/php/php.ini <<EOS
+,s/^;\(extension=mysqli\.so\)/\1/
+,s/^;\(extension=pdo_mysql\.so\)/\1/
+wq
+EOS
+
+  run arch-chroot /mnt <<EOS
+mysql_install_db --user=mysql --basedir=/usr --datadir=/var/lib/mysql
+EOS
+
+  run arch-chroot /mnt <<EOS
+  systemctl enable httpd mariadb
+EOS
+
+  msg 'After first boot, consider running: # mysql_secure_installation'
+fi
 
 msg 'Installing the GUI (please wait)...'
 pacman-cleanup
@@ -191,7 +234,7 @@ run pacman-chroot -Sy xorg-server xorg-drivers lightdm lightdm-gtk-greeter \
   guvcview networkmanager network-manager-applet tint2 usb_modeswitch \
   modemmanager obconf openbox-menu pulseaudio pulseaudio-alsa gnome-icon-theme \
   transmission-gtk pavucontrol xsane viewnior xarchiver xdotool xfce4-notifyd \
-  xpdf gvfs
+  xpdf gvfs xorg-xhost
 
 if [ "$BROWSER" = firefox ]; then
   run pacman-chroot -S firefox-i18n-$LANGCODE thunderbird thunderbird-i18n-$LANGCODE \
@@ -208,6 +251,12 @@ pacman-chroot -S aspell-$LANGCODE 2>/dev/null
 pacman-cleanup
 
 msg 'Configuring the GUI...'
+
+bak etc/conf.d/wireless-regdom
+run ed etc/conf.d/wireless-regdom <<EOS
+,s/^#\(WIRELESS_REGDOM="IT"\)/\1/
+wq
+EOS
 
 bak etc/lightdm/lightdm.conf
 run ed etc/lightdm/lightdm.conf <<EOS
