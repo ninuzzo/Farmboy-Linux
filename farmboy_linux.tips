@@ -41,3 +41,6 @@ Some Windows program may run if you install wine-mono wine_gecko winetricks.
 For wine on 64-bit you will need to enable the multilib repository in
 /etc/pacman.conf. Depending on the software you will need to install other
 linux packages, es. lib32-mpg123.
+---
+The root account is disabled in Farmboy Linux so that you only have to remember
+your own user password. To get to an interactive root prompt use sudo -i.
