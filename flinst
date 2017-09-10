@@ -2,7 +2,7 @@
 # (c) 2017 Antonio Bonifati aka Farmboy
 # distributed under the GNU General Public License v3.0
 
-# Sets up Farmboy Linux from Arch Linux standard installation disk.
+# Sets up Farmboy Linux from the Arch Linux standard installation disk.
 # Please DOUBLE CHECK the .conf configuration file before running this script.
 
 trap 'exit 1' TERM
@@ -25,7 +25,10 @@ function run {
 }
 
 function bak {
-  run cp "$1" "$1.$BAK"
+  while [ $# -gt 0 ]; do
+    run cp "$1" "$1.$BAK"
+    shift
+  done
 }
 
 function pacman-cleanup {
@@ -94,6 +97,8 @@ if [ "$LTSKERNEL" = true ]; then
 fi
 
 msg 'Configuring the base system...'
+
+bak etc/{passwd,shadow,group,gshadow}
 
 bak etc/fstab
 run genfstab -U /mnt '>>' etc/fstab
@@ -174,7 +179,7 @@ EOS
 # this most users can do without. Very few ones need network audio as well.
 pacman-chroot -R pulseaudio pulseaudio-alsa
 
-run cat \>usr/share/libalpm/hooks/confmerge <<EOS
+run cat \>usr/share/libalpm/hooks/confmerge.hook <<EOS
 [Trigger]
 Operation = Upgrade
 Type = File
@@ -190,6 +195,21 @@ Description = Merging of configuration files
 When = PostTransaction
 Exec = /usr/local/sbin/confmerge
 NeedsTargets
+EOS
+
+# This avoids filling up the disk with old packages in the long run.
+run cat \>usr/share/libalpm/hooks/paccache.hook <<EOS
+[Trigger]
+Operation = Remove
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = *
+
+[Action]
+Description = Keep the last cache and the currently installed.
+When = PostTransaction
+Exec = /usr/bin/paccache -rvk2
 EOS
 
 run cat \>usr/local/sbin/confmerge <<'EOS'
@@ -279,12 +299,14 @@ Server = http://repo.archlinux.fr/\$arch
 EOS
 run pacman-chroot -Sy crda openssh ed bash-completion zip unzip \
   git abs yaourt vim alsa-utils unrar timidity++ soundfont-fluid \
-  qrencode tlp ethtool
+  qrencode tlp tlp-rdw ethtool cups foomatic-db foomatic-db-engine \
+  foomatic-db-nonfree cups-filters foomatic-db-nonfree-ppds hplip \
+  python-pyqt5 splix
 
 run arch-chroot /mnt <<EOS
-systemctl enable tlp tlp-sleep
+systemctl enable tlp tlp-sleep NetworkManager-dispatcher.service \
+  org.cups.cupsd.service
 systemctl mask systemd-rfkill.service systemd-rfkill.socket
-systemctl enable NetworkManager-dispatcher.service
 EOS
 
 if [ "$LAMP" = true ]; then
@@ -335,7 +357,67 @@ if [ "$VIRTUALBOX" = true ]; then
   else
     run pacman-chroot -S virtualbox virtualbox-host-modules-arch
   fi
+  run gpasswd -Q /mnt -a '$FIRSTUSER' vboxusers
 fi
+
+run pacman-chroot -S tlp-rdw
+bak etc/default/tlp
+run ed etc/default/tlp <<EOS
+,s/^#\(DEVICES_TO_DISABLE_ON_LAN_CONNECT\)/\1/
+,s/^#\(DEVICES_TO_DISABLE_ON_WIFI_CONNECT\)/\1/
+,s/^#\(DEVICES_TO_DISABLE_ON_WWAN_CONNECT\)/\1/
+wq
+EOS
+
+# Note "lp" is for users allowed to print
+# and "printadmin" is for printer administration. 
+# The default root account cannot be used for the
+# latter task, because it is disabled.
+bak etc/cups/cups-files.conf
+run ed etc/cups/cups-files.conf <<EOS
+,s/^\(SystemGroup\) sys root/\1 printadmin/
+wq
+EOS
+
+# Change the default letter papersize
+bak etc/papersize
+run echo a4 '>>' etc/papersize
+
+# The system print dialog already has a "Print to file"
+# option. I do not see a reason to set up a CUPS virtual printer
+#run pacman-chroot -S cups-pdf
+#run mkdir -m700 'var/spool/cups-pdf/$FIRSTUSER'
+#run chown '$FIRSTUSER:$FIRSTUSER' 'var/spool/cups-pdf/$FIRSTUSER'
+## Prefer absolute target paths, they still work if the link is moved.
+#run ln -sf '/var/spool/cups-pdf/$FIRSTUSER' 'home/$FIRSTUSER/Documents/Virtual_PDF_Printer'
+#run cp usr/share/cups/model/CUPS-PDF_opt.ppd etc/cups/ppd/Virtual_PDF_Printer.ppd
+#run cp usr/share/cups/model/CUPS-PDF_opt.ppd etc/cups/ppd/Virtual_PDF_Printer.ppd.O
+#run ed etc/cups/ppd/Virtual_PDF_Printer.ppd <<EOS
+#,s/^\(*DefaultLabel:\) 2/\1 0/
+#wq
+#EOS
+#run mv etc/cups/printers.conf etc/cups/printers.conf.O
+#run cat '>>' etc/cups/printers.conf <<EOS
+#<Printer Virtual_PDF_Printer>
+#UUID urn:uuid:3eed9640-cd56-3669-7b20-e258265dc3a0
+#Info Virtual PDF Printer
+#Location 
+#MakeModel Generic CUPS-PDF Printer (w/ options)
+#DeviceURI cups-pdf:/
+#State Idle
+#StateTime 1504905423
+#ConfigTime 1504905360
+#Type 8450124
+#Accepting Yes
+#Shared No
+#JobSheets none none
+#QuotaPeriod 0
+#PageLimit 0
+#KLimit 0
+#OpPolicy default
+#ErrorPolicy stop-printer
+#</Printer>
+#EOS
 
 msg 'Installing the GUI (please wait)...'
 pacman-cleanup
@@ -350,7 +432,8 @@ run pacman-chroot -Sy xorg-server xorg-drivers lightdm lightdm-gtk-greeter \
   transmission-gtk xsane viewnior xarchiver xdotool xfce4-notifyd \
   xpdf gvfs xorg-xhost xorg-xprop imagemagick gnome-alsamixer \
   volumeicon lxappearance-obconf lxinput xfce4-notes-plugin xorg-xrandr \
-  accountsservice gksu libreoffice-still calibre lxsession-gtk3
+  accountsservice gksu libreoffice-still calibre lxsession-gtk3 \
+  gnome-system-monitor gv gtk3-print-backends
 
 if [ "$BROWSER" = firefox ]; then
   run pacman-chroot -S firefox-i18n-$LANGCODE thunderbird thunderbird-i18n-$LANGCODE \
@@ -395,8 +478,8 @@ run ed etc/lightdm/lightdm.conf <<EOS
 ,s/^#\(autologin-user-timeout=0\)/\1/
 wq
 EOS
-run groupadd -R /mnt -r autologin
-run useradd -R /mnt -m -G wheel,audio,autologin,optical,vboxusers '$FIRSTUSER'
+run groupadd -R /mnt -r autologin,printadmin
+run useradd -R /mnt -m -G wheel,audio,autologin,lp,optical,printadmin '$FIRSTUSER'
 run chpasswd -R /mnt <<<"$FIRSTUSER:$FIRSTUSERPWD" -
 bak etc/pam.d/lightdm
 run ed etc/pam.d/lightdm <<EOS
@@ -459,6 +542,7 @@ run mkdir etc/skel/.config
 run cat\>etc/skel/.config/mimeapps.list <<EOS
 [Default Applications]
 application/pdf=xpdf.desktop
+application/postscript=gv.desktop
 application/vnd.openxmlformats-officedocument.wordprocessingml.document=libreoffice-writer.desktop
 audio/mpeg=gnome-mplayer.desktop
 audio/ogg=gnome-mplayer.desktop
@@ -607,6 +691,11 @@ s/9/18/
           <command>/usr/local/bin/blankscreen</command>
       </action>
   </keybind>
+  <keybind key="C-A-Delete">
+      <action name="Execute">
+          <command>/usr/bin/gnome-system-monitor</command>
+      </action>
+  </keybind>
 .
 wq
 EOS
@@ -648,6 +737,18 @@ StartupNotify=false
 NoDisplay=true
 EOS
 
+run cat \>usr/share/applications/obreload.desktop <<EOS
+[Desktop Entry]
+Name=Window Manager Reload
+GenericName=Window Manager Reconfiguration
+Icon=/usr/share/icons/gnome/22x22/actions/reload.png
+Exec=openbox --reconfigure
+Terminal=false
+Type=Application
+Categories=Settings;DesktopSettings
+StartupNotify=false
+EOS
+
 bak etc/xdg/openbox/menu.xml
 run cat \>etc/xdg/openbox/menu.xml <<EOS
 <?xml version="1.0" encoding="UTF-8"?>
@@ -657,7 +758,22 @@ run cat \>etc/xdg/openbox/menu.xml <<EOS
 <menu id="desktop-app-menu" label="Applications"
   execute="/usr/bin/openbox-menu lxde-applications.menu" />
 
-<menu id="exit-menu" label="Quit">
+<menu id="root-menu" label="Openbox 3">
+  <menu id="desktop-app-menu"/>
+  <separator />
+  <menu id="client-list-menu"/>
+  <item label="Run program" icon="/usr/share/icons/gnome/16x16/actions/system-run.png">
+    <action name="Execute">
+      <command>gmrun</command>
+    </action>
+  </item>
+  <separator />
+  <item label="Online support   " icon="/usr/share/icons/gnome/16x16/emblems/emblem-web.png">
+    <action name="Execute">
+      <command>xdg-open http://www.farmboylinux.com</command>
+    </action>
+  </item>
+  <separator />
   <item label="Suspend" icon="/usr/share/icons/gnome/16x16/actions/xfce-system-exit.png">
     <action name="Execute">
       <command>systemctl suspend</command>
@@ -690,48 +806,6 @@ run cat \>etc/xdg/openbox/menu.xml <<EOS
       <prompt>Are you sure you want to shut your computer down?</prompt>
     </action>
   </item>
-</menu>
-
-<menu id="system-menu" label="System">
-  <item label="Window Manager Configuration">
-    <action name="Execute">
-      <command>obconf</command>
-      <startupnotify><enabled>yes</enabled></startupnotify>
-    </action>
-  </item>
-  <item label="Reload Window Manager Conf">
-    <action name="Reconfigure" />
-  </item>
-  <separator />
-  <item label="Run program" icon="/usr/share/icons/gnome/16x16/actions/system-run.png">
-    <action name="Execute">
-      <command>gmrun</command>
-    </action>
-  </item>
-  <item label="Manage Printers">
-    <action name="Execute">
-      <command>xdg-open http://localhost:631/</command>
-      <startupnotify>
-        <enabled>no</enabled>
-        <icon>cups</icon>
-      </startupnotify>
-    </action>
-  </item>
-</menu>
-
-<menu id="root-menu" label="Openbox 3">
-  <menu id="desktop-app-menu"/>
-  <separator />
-  <menu id="client-list-menu"/>
-  <menu id="system-menu"/>
-  <separator />
-  <item label="Online support   " icon="/usr/share/icons/gnome/16x16/emblems/emblem-web.png">
-    <action name="Execute">
-      <command>xdg-open http://www.farmboylinux.com</command>
-    </action>
-  </item>
-  <separator />
-  <menu id="exit-menu" />
 </menu>
 
 </openbox_menu>
@@ -778,6 +852,21 @@ launcher_item_app = /usr/share/applications/asoundconf-gtk.desktop
 wq
 EOS
 
+# Use clearer generic names for desktop configuration tools.
+bak usr/share/applications/tint2conf.desktop
+run ed usr/share/applications/tint2conf.desktop <<EOS
+,s/\(Name\)=Tint2 Settings/\1=Taskbar Manager/
+wq
+EOS
+bak usr/share/applications/obconf.desktop
+run ed usr/share/applications/obconf.desktop <<EOS
+,s/\(Name\)=Openbox Configuration Manager/\1=Window Manager/
+a
+Name[it]=Gestore delle finestre
+.
+wq
+EOS
+
 bak usr/share/applications/tint2.desktop
 run ed usr/share/applications/tint2.desktop <<EOS
 a
@@ -820,6 +909,14 @@ EOS
 convert "$2" -resize 96x96 png:/var/lib/AccountsService/icons/$1
 EOF
 run chmod +x usr/local/bin/setavatar
+
+bak etc/profile.d/freetype2.sh
+run ed etc/profile.d/freetype2.sh <<EOS
+,s/^#\(export FREETYPE_PROPERTIES="truetype:interpreter-version\)=40"/\1=38"/
+wq
+EOS
+run ln -sf ../conf.avail/10-sub-pixel-rgb.conf etc/fonts/conf.d/
+run ln -sf ../conf.avail/11-lcdfilter-default.conf etc/fonts/conf.d/
 
 msg 'Building additional packages from source code...'
 run arch-chroot /mnt <<EOS
