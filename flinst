@@ -46,7 +46,9 @@ echo 'up to date, fast & clean'
 echo 'GPL (c) Antonio Bonifati'
 
 msg 'Loading configuration...'
-BASE=${0%.*}
+# Remove extension from this script filename (currently none)
+#BASE=${0%.*}
+BASE=$0
 . "$BASE.conf"
 LANGCODE=${LANG%_*}
 
@@ -61,8 +63,6 @@ msg 'Updating system clock...'
 run timedatectl set-ntp true
 
 msg 'Partioning...'
-# escape all / for ed, harmless for command line usage
-INSTALLDISK="${INSTALLDISK//\//\\\/}"
 for n in "$INSTALLDISK"*; do umount $n 2>/dev/null; done
 OVERWRITE=$([ "$ALLDISK" = true ] && echo o)
 # no more need to make the linux partition bootable, just informative
@@ -100,6 +100,14 @@ msg 'Configuring the base system...'
 
 bak etc/{passwd,shadow,group,gshadow}
 
+# -R /mnt causes segfault in groupadd, we better do it in the chroot
+run arch-chroot /mnt <<EOS
+  groupadd -r autologin
+  groupadd -r printadmin
+  useradd -m -G wheel,audio,autologin,lp,optical,printadmin '$FIRSTUSER'
+  chpasswd <<<"$FIRSTUSER:$FIRSTUSERPWD" -
+EOS
+
 bak etc/fstab
 run genfstab -U /mnt '>>' etc/fstab
 run ed etc/fstab <<EOS
@@ -129,10 +137,11 @@ run echo '$HOSTNAME' \>etc/hostname
 
 run pacman-chroot -Sy intel-ucode grub os-prober
 
-RESUME_OFFSET=$(filefrag -v $SWAPFILE | awk 'NR == 4 { print $4+0 }')
+RESUME_OFFSET=$(filefrag -v /mnt$SWAPFILE | awk 'NR == 4 { print $4+0 }')
 bak etc/default/grub
+# escape all / in INSTALLDISK
 run ed etc/default/grub <<EOS
-,s/^\(GRUB_CMDLINE_LINUX_DEFAULT="quiet\)/\1 resume=$INSTALLDISK$INSTALLPART resume_offset=$RESUME_OFFSET/
+,s/^\(GRUB_CMDLINE_LINUX_DEFAULT="quiet\)/\1 resume=${INSTALLDISK//\//\\/}$INSTALLPART resume_offset=$RESUME_OFFSET/
 ,s/^\(GRUB_TIMEOUT=\)5/\1$GRUB_TIMEOUT/
 wq
 EOS
@@ -161,11 +170,15 @@ run ed etc/mkinitcpio.conf <<EOS
 wq
 EOS
 run arch-chroot /mnt <<EOS
-mkinitcpio -p linux
+if [ "$LTSKERNEL" = true ]; then
+  mkinitcpio -p linux-lts
+else
+  mkinitcpio -p linux
+fi
 EOS
 
 # Disable root login
-passwd -R /mnt -l root
+run passwd -R /mnt -l root \>/dev/null
 
 bak etc/sudoers
 run ed etc/sudoers <<EOS
@@ -287,6 +300,14 @@ done
 EOS
 run chmod +x usr/local/sbin/confmerge
 
+# Ignore the power key, so that it is caught by the WM
+# and no accidental shutdown can happen
+bak etc/systemd/logind.conf
+run ed etc/systemd/logind.conf <<EOS
+,s/^#\(HandlePowerKey\)=poweroff/\1=ignore/
+wq
+EOS
+
 msg 'Installing optionals (please wait)...'
 pacman-cleanup
 
@@ -298,10 +319,10 @@ SigLevel = Never
 Server = http://repo.archlinux.fr/\$arch
 EOS
 run pacman-chroot -Sy crda openssh ed bash-completion zip unzip \
-  git abs yaourt vim alsa-utils unrar timidity++ soundfont-fluid \
+  git asp yaourt vim alsa-utils unrar timidity++ soundfont-fluid \
   qrencode tlp tlp-rdw ethtool cups foomatic-db foomatic-db-engine \
   foomatic-db-nonfree cups-filters foomatic-db-nonfree-ppds hplip \
-  python-pyqt5 splix
+  python-pyqt5 splix rsync
 
 run arch-chroot /mnt <<EOS
 systemctl enable tlp tlp-sleep NetworkManager-dispatcher.service \
@@ -433,7 +454,7 @@ run pacman-chroot -Sy xorg-server xorg-drivers lightdm lightdm-gtk-greeter \
   xpdf gvfs xorg-xhost xorg-xprop imagemagick gnome-alsamixer \
   volumeicon lxappearance-obconf lxinput xfce4-notes-plugin xorg-xrandr \
   accountsservice gksu libreoffice-still calibre lxsession-gtk3 \
-  gnome-system-monitor gv gtk3-print-backends
+  gnome-system-monitor gv gtk3-print-backends oblogout orage
 
 if [ "$BROWSER" = firefox ]; then
   run pacman-chroot -S firefox-i18n-$LANGCODE thunderbird thunderbird-i18n-$LANGCODE \
@@ -478,9 +499,6 @@ run ed etc/lightdm/lightdm.conf <<EOS
 ,s/^#\(autologin-user-timeout=0\)/\1/
 wq
 EOS
-run groupadd -R /mnt -r autologin,printadmin
-run useradd -R /mnt -m -G wheel,audio,autologin,lp,optical,printadmin '$FIRSTUSER'
-run chpasswd -R /mnt <<<"$FIRSTUSER:$FIRSTUSERPWD" -
 bak etc/pam.d/lightdm
 run ed etc/pam.d/lightdm <<EOS
 2i
@@ -617,6 +635,7 @@ run cat \>etc/xdg/openbox/autostart <<EOS
 /usr/bin/light-locker &
 /usr/bin/lxsession &
 /usr/bin/pamac-tray &
+/usr/bin/orage &
 #/usr/bin/lilyterm &
 /usr/bin/$BROWSER &
 EOS
@@ -681,8 +700,12 @@ s/9/18/
     </action>
   </keybind>
   <keybind key="XF86PowerOff">
-    <action name="ShowMenu">
-      <execute>exit-menu</execute>
+    <action name="execute">
+      <startupnotify>
+        <enabled>true</enabled>
+        <name>oblogout</name>
+      </startupnotify>
+      <execute>oblogout</execute>
     </action>
   </keybind>
   <!-- Keybinding for turning off screen with shortcut -->
@@ -832,22 +855,28 @@ run ed etc/xdg/tint2/tint2rc <<EOS
 ,s/\(taskbar_name =\) 1/\1 0/
 ,s/\(urgent_nb_of_blink =\) 100000/\1 8/
 ,s/\(systray_padding =\) 0 4 2/\1 0 0 2/
-,s/\(launcher_item_app = \/usr\/share\/applications\/tint2conf.desktop\)/#\1/
-,s/\(launcher_item_app = \/usr\/local\/share\/applications\/tint2conf.desktop\)/#\1/
+,s/\(launcher_item_app = tint2conf.desktop\)/#\1/
 a
 launcher_item_app = /usr/share/applications/startmenu.desktop
 launcher_item_app = /usr/share/applications/showdesktop.desktop
 .
-,s/\(launcher_item_app = \/usr\/local\/share\/applications\/iceweasel.desktop\)/#\1/
-,s/\(launcher_item_app = /usr/share/applications/chromium\)-browser.desktop/\1.desktop/
+,s/\(launcher_item_app = iceweasel.desktop\)/#\1/
+,s/\(launcher_item_app = chromium\)-browser.desktop/\1.desktop/
 +a
 launcher_item_app = /usr/share/applications/opera.desktop
 launcher_item_app = /usr/share/applications/pcmanfm.desktop
 launcher_item_app = /usr/share/applications/asoundconf-gtk.desktop
 
 .
-,s/\(time2_format =\) %A %d %B/\1 %a %d %b/
-,s/\(clock_rclick_command =\) orage/\1 osmo/
+/^time1_format/
+a
+time1_font = monospace 18
+.
+,s/\(time2_format =\) %A %d %B/\1 /
+,s/\(clock_tooltip =\) /\1 %A, %d. %B %Y/
+,s/\(clock_rclick_command = \)/\1orage -t/
+,s/\(clock_lclick_command = orage\)/\1 -t/
+,s/\(clock_mclick_command = \)/\1orage -t/
 ,s/\(battery_hide =\) 101/\1 98/
 wq
 EOS
@@ -917,6 +946,12 @@ wq
 EOS
 run ln -sf ../conf.avail/10-sub-pixel-rgb.conf etc/fonts/conf.d/
 run ln -sf ../conf.avail/11-lcdfilter-default.conf etc/fonts/conf.d/
+
+bak etc/oblogout.conf
+run ed etc/oblogout.conf <<EOS
+,s/^\(lock\) = xtrlock &/\1 = light-locker-command -l/
+wq
+EOS
 
 msg 'Building additional packages from source code...'
 run arch-chroot /mnt <<EOS
