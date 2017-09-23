@@ -5,6 +5,9 @@
 # Sets up Farmboy Linux from the Arch Linux standard installation disk.
 # Please DOUBLE CHECK the .conf configuration file before running this script.
 
+# Minimum hd-space requirement
+export MINGB=20
+
 trap 'exit 1' TERM
 export TOP_PID=$$
 
@@ -41,6 +44,13 @@ function pacman-chroot {
     --gpgdir /mnt/etc/pacman.d/gnupg --noconfirm "$@"
 }
 
+# Find out if there is already an EFI System Partition
+# and in that case, return its number.
+function efi-partno {
+  local PART=$(fdisk -l "$INSTALLDISK" | grep 'EFI System' | awk '{ print $1 }')
+  echo ${PART#${PART%%*([0-9])}}  # Extract digits at the end of string
+}
+
 echo 'F A R M B O Y  L I N U X'
 echo 'up to date, fast & clean'
 echo 'GPL (c) Antonio Bonifati'
@@ -64,22 +74,109 @@ run timedatectl set-ntp true
 
 msg 'Partioning...'
 for n in "$INSTALLDISK"*; do umount $n 2>/dev/null; done
-OVERWRITE=$([ "$ALLDISK" = true ] && echo o)
-# no more need to make the linux partition bootable, just informative
-# so we better do not do it, since there could be another (i.e. windows)
-# partition bootable and we cannot have two
-run fdisk '$INSTALLDISK' <<EOS
-$OVERWRITE
+
+if [ "$ALLDISK" = true ]; then
+  if [ -d '/sys/firmware/efi' ]; then
+    # Installation disk booted in EUFI, use modern UEFI boot
+    # (since it is supported) along with modern GPT partition scheme,
+    # which allows disks to be bigger than 2TB.
+    EFIPART=1
+    INSTALLPART=2
+    run fdisk '$INSTALLDISK' <<EOS
+g
+n
+$EFIPART
+
++512M
+Y
+t
+1
+n
+$INSTALLPART
+
+
+Y
+w
+EOS
+  else
+    INSTALLPART=1
+    # Use MBR boot and DOS MBR partition scheme
+    run fdisk '$INSTALLDISK' <<EOS
+o
 n
 p
 $INSTALLPART
 
 
+Y
 w
 EOS
+  fi
+else
+  PARTYPE=$(fdisk -l "$INSTALLDISK" | grep 'Disklabel type:' | awk '{ print $3 }')
+  if [ "$PARTYPE" = gpt ]; then
+    # Assume GTP usage means EFI usage. This is always true for Windows.
+    # Look for EFI system partition number or create a new one if not found
+    EFIPART=$(efi-partno)
+    if [ -z "$EFIPART" ]; then
+      run fdisk '$INSTALLDISK' <<EOS
+n
+$EFIPART
+
++512M
+Y
+t
+1
+w
+EOS
+      partprobe 2>/dev/null
+      EFIPART=$(efi-partno)
+    fi
+  fi
+  
+  # Create a new partition to install to in free space
+  # unless asked to install in an existing partition.
+  if [ -z "$INSTALLPART" ]; then
+    FREEGB=$(sudo parted /dev/sda unit GB print free | grep 'Free Space' | tail -n1 | awk '{ print strtonum($3) }')
+    if (( $(echo "$FREEGB < $MINGB" | bc -l) )); then
+      echo "Error: you need at let ${MINGB}GB free on $INSTALLDISK, got only ${FREEGB}GB. Installation halted!"
+      exit 1
+    fi
+
+    # Determine the partition number from fdisk default
+    # No more need to make the linux partition bootable (just informative),
+    # so we better do not do it, since there could be another os's (i.e. windows)
+    # bootable partition and we cannot have two.
+    # BUG: does not support creation of extented partitions
+    # maybe expect is needed here for that, but it is old
+    # stuff we do not bother to support.
+    INSTALLPART=$(fdisk '$INSTALLDISK' <<EOS |
+n
+
+
+
+
+Y
+w
+EOS
+     sed -rn 's/^Partition number \([-0-9,]+, default ([0-9]+)\):|^Selected partition ([0-9]+)/\1\2/p')
+  else
+    PARTGB=$(lsblk $INSTALLDISK$INSTALLPART | tail -n1 | awk '{ print strtonum($4) }')
+    if (( $(echo "$PARTGB < $MINGB" | bc -l) )); then
+      echo "Error: you need at let ${MINGB}GB free on $INSTALLDISK, but partition $INSTALLDISK$INSTALLPART has only ${PARTGB}GB. Installation halted!"
+      exit 1
+    fi
+  fi
+fi
+
 partprobe 2>/dev/null
 run mkfs.ext4 -F '$INSTALLDISK$INSTALLPART'
 run mount '$INSTALLDISK$INSTALLPART' /mnt
+if [ "EFIPART" ]; then
+  run mkfs.fat -F32 '$INSTALLDISK$EFIPART'
+  mkdir /mnt/boot
+  run mount '$INSTALLDISK$EFIPART' /mnt/boot
+fi
 cd /mnt
 SWAPFILE="${SWAPFILE#/}"
 run fallocate -l '$(head -n1 /proc/meminfo | awk "{ print \$2 }")K' '$SWAPFILE'
@@ -104,7 +201,7 @@ bak etc/{passwd,shadow,group,gshadow}
 run arch-chroot /mnt <<EOS
   groupadd -r autologin
   groupadd -r printadmin
-  useradd -m -G wheel,audio,autologin,lp,optical,printadmin '$FIRSTUSER'
+  useradd -m -G wheel,autologin,lp,optical,printadmin '$FIRSTUSER'
   chpasswd <<<"$FIRSTUSER:$FIRSTUSERPWD" -
 EOS
 
@@ -146,9 +243,15 @@ run ed etc/default/grub <<EOS
 wq
 EOS
 
-# GRUB searcher has issues finding ext* partitions after a large NTFS partition
-# See: https://bbs.archlinux.org/viewtopic.php?id=169650
-run grub-install --boot-directory=/mnt/boot --target=i386-pc --disk-module=native '${INSTALLDISK}'
+if [ "$EFIPART" ]; then
+  run pacman-chroot -S efibootmgr
+  run grub-install --efi-directory=/mnt/boot --target=x86_64-efi --bootloader-id=grub '${INSTALLDISK}'
+else
+  # GRUB searcher has issues finding ext* partitions after a large NTFS partition
+  # See: https://bbs.archlinux.org/viewtopic.php?id=169650
+  run grub-install --boot-directory=/mnt/boot --target=i386-pc --disk-module=native '${INSTALLDISK}'
+fi
+
 run arch-chroot /mnt <<EOS
 grub-mkconfig -o /boot/grub/grub.cfg
 EOS
@@ -277,16 +380,16 @@ merge_file() {
         # ... and patch it to redo the user's edits.
         patch $PATCHOPTS "$1" <$PATCH
         # Remove pesky patch backup files.
-        rm -f "$1~"
+        rm -f "$1~" "$1.orig"
       else
         echoerr "warning: merging of \`$file' and \`$file.$ORIG' failed; \`$file.$NEW' has been left in place. Check for conflicts and merge manually."
       fi
     else
       # Original missing... can't merge.
-      # Install the new file as the new default anyway.
-      mv "$file.$NEW" "$file.$ORIG"
+      # Install the new file as the new configuration.
+      mv "$file.$NEW" "$file"
 
-      echoerr "warning: original version of \`$file.$ORIG' was missing and has been created. Manually check the differences with \`$file', which may be obsolete and not work."
+      echoerr "warning: original version of \`$file.$ORIG' was missing, so \`$file.$NEW' was installed as \`$file' and the previous version of \`$file' was overwritten."
     fi
   fi
 }
@@ -446,15 +549,15 @@ pacman-cleanup
 # dependencies of other packages, so that they won't be removed by a
 # recursive removal of the the latter
 run pacman-chroot -Sy xorg-server xorg-drivers lightdm lightdm-gtk-greeter \
-  ttf-dejavu artwiz-fonts openbox pcmanfm-gtk3 lilyterm '$BROWSER' \
-  asunder filezilla galculator gimp gmrun gnome-keyring gnome-mplayer \
-  gnumeric guvcview networkmanager network-manager-applet tint2 \
+  ttf-dejavu ttf-ubuntu-font-family artwiz-fonts openbox pcmanfm-gtk3 \
+  lilyterm '$BROWSER' asunder filezilla galculator gimp gmrun gnome-keyring \
+  gnome-mplayer gnumeric guvcview networkmanager network-manager-applet tint2 \
   usb_modeswitch modemmanager obconf openbox-menu gnome-icon-theme \
   transmission-gtk xsane viewnior xarchiver xdotool xfce4-notifyd \
   xpdf gvfs xorg-xhost xorg-xprop imagemagick gnome-alsamixer \
   volumeicon lxappearance-obconf lxinput xfce4-notes-plugin xorg-xrandr \
   accountsservice gksu libreoffice-still calibre lxsession-gtk3 \
-  gnome-system-monitor gv gtk3-print-backends oblogout orage
+  gnome-system-monitor gv gtk3-print-backends oblogout orage xfburn
 
 if [ "$BROWSER" = firefox ]; then
   run pacman-chroot -S firefox-i18n-$LANGCODE thunderbird thunderbird-i18n-$LANGCODE \
@@ -482,7 +585,8 @@ msg 'Configuring the GUI...'
 # Set gksu to use sudo by default
 # since the root account is disabled
 run arch-chroot /mnt <<EOS
-su - '$FIRSTUSER' -c 'gconftool-2 --set --type boolean /apps/gksu/sudo-mode true'
+su - '$FIRSTUSER' -c 'mkdir -p /home/$FIRSTUSER/.config/gconf;
+gconftool-2 --set --type boolean /apps/gksu/sudo-mode true'
 EOS
 
 bak etc/conf.d/wireless-regdom
@@ -506,11 +610,11 @@ auth        sufficient  pam_succeed_if.so user ingroup nopasswdlogin
 .
 wq
 EOS
-run groupadd -R /mnt -r nopasswdlogin
-# Skipped, because we want the screen locker to ask for a password,
-# so we only configured nopasswdlogin but did not enable it
-#run gpasswd -Q /mnt -a '$FIRSTUSER' nopasswdlogin
 run arch-chroot /mnt <<EOS
+groupadd -r nopasswdlogin
+# Skipped, because we want the screen locker to ask for a password,
+# so we only configured no-password logins but did not enable it
+#gpasswd -a '$FIRSTUSER' nopasswdlogin
 systemctl enable lightdm NetworkManager ModemManager
 EOS
 
@@ -912,18 +1016,18 @@ run cat \> usr/local/bin/setavatar <<'EOF'
 
 SELF=$(basename $0)
 if [ $# -ne 2 ]; then
-  echo "Syntax: $SELF userName iconFile" > /dev/stderr
+  echo "Syntax: $SELF userName iconFile" >&2
   exit 1
 fi
 
 # check username exists
 if ! id $1 >/dev/null 2>&1; then
-  echo "$SELF: unexistent user \`$1'" > /dev/stderr
+  echo "$SELF: unexistent user \`$1'" >&2
   exit 1
 fi
 
 if [ ! -f "$2" ]; then
-  echo "$SELF: unexistent avatar file \`$2'" > /dev/stderr
+  echo "$SELF: unexistent avatar file \`$2'" >&2
   exit 1
 fi
 
@@ -958,7 +1062,7 @@ run arch-chroot /mnt <<EOS
 mkdir -p /tmp/aur-builds
 cd /tmp/aur-builds
 # Add package names to compile here
-pkgs=(ttf-ms-fonts asoundconf soundfont-sgm tclreadline glabels-light pamac-aur)
+pkgs=(ttf-ms-fonts asoundconf soundfont-sgm tclreadline glabels-light pamac-aur gsfonts-type1)
 if [ "$TOR" = true ]; then
   # unfortunately localized versions are often old
   pkgs+=(tor-browser-en)
@@ -1012,12 +1116,12 @@ reboot
 # optionals:
 # pacmanxg audacity bc bind-tools bluez bluez-utils celestia chromium dos2unix dropbox elinks
 # geany geany-plugins gnupg google-talkplugin tor-browser-en
-# mlocate networkmanager-openvpn osmo pidgin
+# mlocate networkmanager-openvpn pidgin htop
 # pkgfile rfkill screen sigil simplescreenrecorder skype skype-call-recorder
 # stellarium subdownloader syasokoban teamviewer testdisk tidy whois
 # wine wine-mono wine_gecko winetricks words youtube-dl wget mkvtoolnix-gui
 # mlocate mp3gain mp3info ntfs-3g obexfs pwgen qbittorent musescore soundfont-sgm
-# vkeybd vmpk dosfstools mtools dnsutils elinks lxappearance zsh
+# vkeybd vmpk dosfstools mtools dnsutils elinks lxappearance zsh cdrtools
 
 # php php-apache php-phpdbg phpmyadmin
 
