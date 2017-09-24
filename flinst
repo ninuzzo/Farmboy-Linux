@@ -5,9 +5,6 @@
 # Sets up Farmboy Linux from the Arch Linux standard installation disk.
 # Please DOUBLE CHECK the .conf configuration file before running this script.
 
-# Minimum hd-space requirement
-export MINGB=20
-
 trap 'exit 1' TERM
 export TOP_PID=$$
 
@@ -137,8 +134,16 @@ EOS
   # Create a new partition to install to in free space
   # unless asked to install in an existing partition.
   if [ -z "$INSTALLPART" ]; then
-    FREEGB=$(sudo parted /dev/sda unit GB print free | grep 'Free Space' | tail -n1 | awk '{ print strtonum($3) }')
-    if (( $(echo "$FREEGB < $MINGB" | bc -l) )); then
+    FREESLOTS=($(sudo parted /dev/sda unit GB print free | grep 'Free Space' | awk '{ print strtonum($3) }'))
+    FOUND=
+    for FREEGB in "${FREESLOTS[@]}"; do
+      if (( $(echo "$FREEGB >= $MINGB" | bc -l) )); then
+        FOUND=true
+	break
+      fi
+    done
+
+    if [ -z "$FOUND" ]; then
       echo "Error: you need at let ${MINGB}GB free on $INSTALLDISK, got only ${FREEGB}GB. Installation halted!"
       exit 1
     fi
@@ -150,16 +155,16 @@ EOS
     # BUG: does not support creation of extented partitions
     # maybe expect is needed here for that, but it is old
     # stuff we do not bother to support.
-    INSTALLPART=$(fdisk '$INSTALLDISK' <<EOS |
+    INSTALLPART=$(fdisk $INSTALLDISK 2>/dev/null <<EOS |
 n
 
 
 
-
++${FREEGB}G
 Y
 w
 EOS
-     sed -rn 's/^Partition number \([-0-9,]+, default ([0-9]+)\):|^Selected partition ([0-9]+)/\1\2/p')
+     sed -rn 's/^Partition number \([-0-9,]+, default ([0-9]+)\):.*|^Selected partition ([0-9]+).*/\1\2/p')
   else
     PARTGB=$(lsblk $INSTALLDISK$INSTALLPART | tail -n1 | awk '{ print strtonum($4) }')
     if (( $(echo "$PARTGB < $MINGB" | bc -l) )); then
@@ -172,7 +177,7 @@ fi
 partprobe 2>/dev/null
 run mkfs.ext4 -F '$INSTALLDISK$INSTALLPART'
 run mount '$INSTALLDISK$INSTALLPART' /mnt
-if [ "EFIPART" ]; then
+if [ "$EFIPART" ]; then
   run mkfs.fat -F32 '$INSTALLDISK$EFIPART'
   mkdir /mnt/boot
   run mount '$INSTALLDISK$EFIPART' /mnt/boot
