@@ -134,17 +134,19 @@ EOS
   # Create a new partition to install to in free space
   # unless asked to install in an existing partition.
   if [ -z "$INSTALLPART" ]; then
-    FREESLOTS=($(sudo parted /dev/sda unit GB print free | grep 'Free Space' | awk '{ print strtonum($3) }'))
+    # It looks like parted reports free space as a power of 1000,
+    # not 1024 because it reports a higher number.
+    FREESLOTS=($(parted $INSTALLDISK unit GB print free | grep 'Free Space' | awk '{ printf "%u\n", $3*1000*1000*1000/1024/1024/1024 }'))
     FOUND=
     for FREEGB in "${FREESLOTS[@]}"; do
-      if (( $(echo "$FREEGB >= $MINGB" | bc -l) )); then
+      if [ "$FREEGB" -ge "$MINGB" ]; then
         FOUND=true
 	break
       fi
     done
 
     if [ -z "$FOUND" ]; then
-      echo "Error: you need at let ${MINGB}GB free on $INSTALLDISK, got only ${FREEGB}GB. Installation halted!"
+      echo "Error: you need at let ${MINGB}GB free on $INSTALLDISK. Installation halted!"
       exit 1
     fi
 
@@ -166,9 +168,9 @@ w
 EOS
      sed -rn 's/^Partition number \([-0-9,]+, default ([0-9]+)\):.*|^Selected partition ([0-9]+).*/\1\2/p')
   else
-    PARTGB=$(lsblk $INSTALLDISK$INSTALLPART | tail -n1 | awk '{ print strtonum($4) }')
-    if (( $(echo "$PARTGB < $MINGB" | bc -l) )); then
-      echo "Error: you need at let ${MINGB}GB free on $INSTALLDISK, but partition $INSTALLDISK$INSTALLPART has only ${PARTGB}GB. Installation halted!"
+    PARTGB=$(lsblk $INSTALLDISK$INSTALLPART | tail -n1 | awk '{ printf "%u\n", $4 }')
+    if [ "$PARTGB" -lt "$MINGB" ]; then
+      echo "Error: you need at least ${MINGB}GB free on $INSTALLDISK, but partition $INSTALLDISK$INSTALLPART is only ${PARTGB}GB. Installation halted!"
       exit 1
     fi
   fi
