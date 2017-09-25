@@ -48,3 +48,10 @@ your own user password. To get to an interactive root prompt use sudo -i.
 Check what graphics card your system has
 
 $ lspci -k | grep -A 2 -E "(VGA|3D)"
+---
+To verify whether hardware acceleration is enabled for your video card,
+install mesa-demos, if you don't already have it. Then check if the output
+of this command is as follows:
+
+$ glxinfo | grep "direct rendering"
+direct rendering: Yes

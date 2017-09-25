@@ -74,6 +74,14 @@ LOG="$(readlink -f $BASE.log)"
 msg "Logging to $LOG"
 : >"$LOG"
 
+run pacman --noconfirm -Sy ed dmidecode
+TOTALGB=$(dmidecode --type 17 | awk '/Size:/{ MB += $2 } END { printf "%u\n", MB/1024 }')
+
+if [ "$TOTALGB" -lt "$MINGB" ]; then
+  echo "${MINGB}GB of RAM are required, this system only has $TOTALGB. Installation halted!" >&2
+  exit 1
+fi
+
 msg "Setting $KEYMAP keyboard..."
 run loadkeys '$KEYMAP'
 
@@ -158,7 +166,7 @@ EOS
     done
 
     if [ -z "$FOUND" ]; then
-      echo "Error: you need at let ${MINGB}GB free on $INSTALLDISK. Installation halted!"
+      echo "Error: you need at let ${MINGB}GB free on $INSTALLDISK. Installation halted!" >&2
       exit 1
     fi
 
@@ -212,8 +220,6 @@ if [ "$LTSKERNEL" = true ]; then
 fi
 
 msg 'Configuring the base system...'
-
-run pacman --noconfirm -Sy ed
 
 bak etc/{passwd,shadow,group,gshadow}
 
@@ -606,7 +612,8 @@ pacman-chroot -Sy xorg-server xorg-drivers lightdm lightdm-gtk-greeter \
   xpdf gvfs xorg-xhost xorg-xprop imagemagick gnome-alsamixer \
   volumeicon lxappearance-obconf lxinput xfce4-notes-plugin xorg-xrandr \
   accountsservice gksu libreoffice-still calibre lxsession-gtk3 \
-  gnome-system-monitor gv gtk3-print-backends oblogout orage xfburn
+  gnome-system-monitor gv gtk3-print-backends oblogout orage xfburn udiskie \
+  light-locker
 
 if [ "$BROWSER" = firefox ]; then
   pacman-chroot -S firefox-i18n-$LANGCODE thunderbird thunderbird-i18n-$LANGCODE \
@@ -752,6 +759,12 @@ use_transparent_background=false
 up_enabled=false
 down_enabled=false
 mute_enabled=false
+EOS
+
+run mkdir etc/skel/.config/orage
+run cat\>etc/skel/.config/orage/oragerc <<EOS
+[PARAMETERS]
+Start visible=false
 EOS
 
 run cat\>etc/X11/xorg.conf.d/70-synaptics.conf <<EOS
@@ -926,57 +939,82 @@ StartupNotify=false
 EOS
 
 bak etc/xdg/openbox/menu.xml
+# TODO: I must provide GUI to change system language and this menu too.
+case $LANG in
+it*)
+  OM_APPS="Applicazioni"
+  OM_RUN="Esegui Comando"
+  OM_SUPPORT="Supporto Online  "
+  OM_SUSPEND="Sospendi"
+  OM_HIBERNATE="Iberna"
+  OM_LOCK="Blocca Schermo"
+  OM_LOGOUT="Esci"
+  OM_RESTART="Riavvia"
+  OM_POWEROFF="Spegni"
+  ;;
+*)
+  OM_APPS="Applications"
+  OM_RUN="Run Program"
+  OM_SUPPORT="Online Support   "
+  OM_SUSPEND="Suspend"
+  OM_HIBERNATE="Hibernate"
+  OM_LOCK="Lock Screen"
+  OM_LOGOUT="Log Out"
+  OM_RESTART="Restart"
+  OM_POWEROFF="Power Off"
+  ;;
+esac
 run cat \>etc/xdg/openbox/menu.xml <<EOS
 <?xml version="1.0" encoding="UTF-8"?>
 
 <openbox_menu xmlns="http://openbox.org/3.4/menu">
 
-<menu id="desktop-app-menu" label="Applications"
+<menu id="desktop-app-menu" label="$OM_APPS"
   execute="/usr/bin/openbox-menu lxde-applications.menu" />
 
 <menu id="root-menu" label="Openbox 3">
   <menu id="desktop-app-menu"/>
   <separator />
   <menu id="client-list-menu"/>
-  <item label="Run program" icon="/usr/share/icons/gnome/16x16/actions/system-run.png">
+  <item label="$OM_RUN" icon="/usr/share/icons/gnome/16x16/actions/system-run.png">
     <action name="Execute">
       <command>gmrun</command>
     </action>
   </item>
   <separator />
-  <item label="Online support   " icon="/usr/share/icons/gnome/16x16/emblems/emblem-web.png">
+  <item label="$OM_SUPPORT" icon="/usr/share/icons/gnome/16x16/emblems/emblem-web.png">
     <action name="Execute">
       <command>xdg-open http://www.farmboylinux.com</command>
     </action>
   </item>
   <separator />
-  <item label="Suspend" icon="/usr/share/icons/gnome/16x16/actions/xfce-system-exit.png">
+  <item label="$OM_SUSPEND" icon="/usr/share/icons/gnome/16x16/actions/xfce-system-exit.png">
     <action name="Execute">
       <command>systemctl suspend</command>
     </action>
   </item>
-  <item label="Hibernate" icon="/usr/share/icons/gnome/16x16/actions/xfce-system-lock.png">
+  <item label="$OM_HIBERNATE" icon="/usr/share/icons/gnome/16x16/actions/xfce-system-lock.png">
     <action name="Execute">
       <command>systemctl hibernate</command>
     </action>
   </item>
-  <item label="Lock Screen" icon="/usr/share/icons/gnome/16x16/actions/xfce-system-lock.png">
+  <item label="$OM_LOCK" icon="/usr/share/icons/gnome/16x16/actions/xfce-system-lock.png">
     <action name="Execute">
       <command>light-locker-command -l</command>
     </action>
   </item>
-  <item label="Log Out" icon="/usr/share/icons/gnome/16x16/actions/system-log-out.png">
+  <item label="$OM_LOGOUT" icon="/usr/share/icons/gnome/16x16/actions/system-log-out.png">
     <action name="Exit">
       <prompt>Are you sure you want to exit and login again?</prompt>
     </action>
   </item>
-  <item label="Restart" icon="/usr/share/icons/gnome/16x16/actions/redo.png">
+  <item label="$OM_RESTART" icon="/usr/share/icons/gnome/16x16/actions/redo.png">
     <action name="Execute">
       <command>systemctl reboot</command>
       <prompt>Are you sure you want to reboot your computer?</prompt>
     </action>
   </item>
-  <item label="Power Off" icon="/usr/share/icons/gnome/16x16/actions/system-shutdown.png">
+  <item label="$OM_POWEROFF" icon="/usr/share/icons/gnome/16x16/actions/system-shutdown.png">
     <action name="Execute">
       <command>systemctl poweroff</command>
       <prompt>Are you sure you want to shut your computer down?</prompt>
