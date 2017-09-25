@@ -35,6 +35,7 @@ function pacman-cleanup {
   run yes \| pacman -r /mnt --cachedir /mnt/var/cache/pacman/pkg -Scc
 }
 
+# For installations we could use pacstrap, but sometimes we also need removals.
 function pacman-chroot {
   run pacman -r /mnt --config /mnt/etc/pacman.conf \
     --cachedir /mnt/var/cache/pacman/pkg --hookdir /mnt/etc/pacman.d/hooks \
@@ -48,8 +49,15 @@ function efi-partno {
   echo ${PART#${PART%%*([0-9])}}  # Extract digits at the end of string
 }
 
-run pacman --noconfirm -Sy terminus-font ed
-setfont ter-v32
+# Made with figlet
+cat <<'EOS'
+ _____                    _                   _     _                  
+|  ___|_ _ _ __ _ __ ___ | |__   ___  _   _  | |   (_)_ __  _   ___  __
+| |_ / _` | '__| '_ ` _ \| '_ \ / _ \| | | | | |   | | '_ \| | | \ \/ /
+|  _| (_| | |  | | | | | | |_) | (_) | |_| | | |___| | | | | |_| |>  < 
+|_|  \__,_|_|  |_| |_| |_|_.__/ \___/ \__, | |_____|_|_| |_|\__,_/_/\_\
+                                      |___/                            
+EOS
 
 echo 'F A R M B O Y  L I N U X'
 echo 'up to date, fast & clean'
@@ -139,7 +147,8 @@ EOS
   if [ -z "$INSTALLPART" ]; then
     # It looks like parted reports free space as a power of 1000,
     # not 1024 because it reports a higher number.
-    FREESLOTS=($(parted $INSTALLDISK unit GB print free | grep 'Free Space' | awk '{ printf "%u\n", $3*1000*1000*1000/1024/1024/1024 }'))
+    FREESLOTS=($(parted "$INSTALLDISK" unit GB print free | grep 'Free Space' |
+      awk '{ printf "%u\n", $3*1000*1000*1000/1024/1024/1024 }'))
     FOUND=
     for FREEGB in "${FREESLOTS[@]}"; do
       if [ "$FREEGB" -ge "$MINGB" ]; then
@@ -160,7 +169,7 @@ EOS
     # BUG: does not support creation of extented partitions
     # maybe expect is needed here for that, but it is old
     # stuff we do not bother to support.
-    INSTALLPART=$(fdisk $INSTALLDISK 2>/dev/null <<EOS |
+    INSTALLPART=$(fdisk "$INSTALLDISK" 2>/dev/null <<EOS |
 n
 
 
@@ -171,7 +180,7 @@ w
 EOS
      sed -rn 's/^Partition number \([-0-9,]+, default ([0-9]+)\):.*|^Selected partition ([0-9]+).*/\1\2/p')
   else
-    PARTGB=$(lsblk $INSTALLDISK$INSTALLPART | tail -n1 | awk '{ printf "%u\n", $4 }')
+    PARTGB=$(lsblk "$INSTALLDISK$INSTALLPART" | tail -n1 | awk '{ printf "%u\n", $4 }')
     if [ "$PARTGB" -lt "$MINGB" ]; then
       echo "Error: you need at least ${MINGB}GB free on $INSTALLDISK, but partition $INSTALLDISK$INSTALLPART is only ${PARTGB}GB. Installation halted!"
       exit 1
@@ -203,6 +212,8 @@ if [ "$LTSKERNEL" = true ]; then
 fi
 
 msg 'Configuring the base system...'
+
+run pacman --noconfirm -Sy ed
 
 bak etc/{passwd,shadow,group,gshadow}
 
@@ -241,23 +252,34 @@ run echo LANG='$LANG' \>etc/locale.conf
 run echo KEYMAP='$KEYMAP' \>etc/vconsole.conf
 run echo '$HOSTNAME' \>etc/hostname
 
+RESUME_OFFSET=$(filefrag -v /mnt$SWAPFILE | awk 'NR == 4 { print $4+0 }')
+PARTUUID=$(blkid -s PARTUUID -o value "$INSTALLDISK$INSTALLPART")
 if [ -z "$EFIPART" ]; then
   pacman-chroot -Sy intel-ucode grub os-prober
+
+  bak etc/default/grub
+  # If we were to use standard device names
+  # we would need to escape all / in $INSTALLDISK
+  # inside ed with: ${INSTALLDISK//\//\\/}
+  run ed etc/default/grub <<EOS
+,s/^\(GRUB_CMDLINE_LINUX_DEFAULT="quiet\)/\1 resume=PARTUUID=$PARTUUID resume_offset=$RESUME_OFFSET/
+,s/^\(GRUB_TIMEOUT=\)5/\1$TIMEOUT/
+wq
+EOS
 fi
 
 run arch-chroot /mnt <<EOS
 if [ "$EFIPART" ]; then
   bootctl --path=/boot install
 else
+  grub-mkconfig -o /boot/grub/grub.cfg
+
   # GRUB searcher has issues finding ext* partitions after a large NTFS partition
   # See: https://bbs.archlinux.org/viewtopic.php?id=169650
-  grub-install --boot-directory=/boot --target=i386-pc --disk-module=native '${INSTALLDISK}'
-  grub-mkconfig -o /boot/grub/grub.cfg
+  grub-install --boot-directory=/boot --target=i386-pc --disk-module=native '$INSTALLDISK'
 fi
 EOS
 
-RESUME_OFFSET=$(filefrag -v /mnt$SWAPFILE | awk 'NR == 4 { print $4+0 }')
-PARTUUID=$(blkid -s PARTUUID -o value $INSTALLDISK$INSTALLPART)
 if [ "$EFIPART" ]; then
   # TODO: needed as of now? Or auto-generated? TO BE TESTED
   bak boot/loader/loader.conf
@@ -275,16 +297,6 @@ title Farmboy Linux
 linux /vmlinuz-linux
 initrd /initramfs-linux.img
 options root=PARTUUID=$PARTUUID rw resume=PARTUUID=$PARTUUID resume_offset=$RESUME_OFFSET
-EOS
-else
-  bak etc/default/grub
-  # If we were to use standard device names
-  # we would need to escape all / in INSTALLDISK
-  # inside ed with: ${INSTALLDISK//\//\\/}
-  run ed etc/default/grub <<EOS
-,s/^\(GRUB_CMDLINE_LINUX_DEFAULT="quiet\)/\1 resume=PARTUUID=$PARTUUID resume_offset=$RESUME_OFFSET/
-,s/^\(GRUB_TIMEOUT=\)5/\1$TIMEOUT/
-wq
 EOS
 fi
 
@@ -517,7 +529,7 @@ if [ "$VIRTUALBOX_HOST" = true ]; then
   run gpasswd -Q /mnt -a '$FIRSTUSER' vboxusers
 fi
 
-if [ "$VIRTUALBOX_GUEST" = true; ]; then
+if [ "$VIRTUALBOX_GUEST" = true ]; then
   pacman-chroot -S virtualbox-guest-modules-arch virtualbox-guest-utils
 fi
 
@@ -1095,6 +1107,7 @@ wq
 EOS
 
 msg 'Building additional packages from source code...'
+pacman-cleanup
 run arch-chroot /mnt <<EOS
 mkdir -p /tmp/aur-builds
 cd /tmp/aur-builds
@@ -1138,8 +1151,9 @@ if {$tcl_interactive} {
 }
 EOS
 
+run swapoff '$SWAPFILE'
 cd /
-umount /mnt
+umount -R /mnt
 msg 'Installation ended successfully. Rebooting...'
 
 # Ring the bell repeatedly so to alert user we are almost done
@@ -1151,7 +1165,7 @@ reboot
 # http://mrbluecoat.blogspot.it/2013/12/auto-play-cds-and-dvds-on-lubuntu-1310.html
 
 # optionals:
-# pacmanxg audacity bc bind-tools bluez bluez-utils celestia chromium dos2unix dropbox elinks
+# audacity bc bind-tools bluez bluez-utils celestia chromium dos2unix dropbox elinks
 # geany geany-plugins gnupg google-talkplugin tor-browser-en
 # mlocate networkmanager-openvpn pidgin htop
 # pkgfile rfkill screen sigil simplescreenrecorder skype skype-call-recorder
