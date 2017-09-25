@@ -36,7 +36,7 @@ function pacman-cleanup {
 }
 
 function pacman-chroot {
-  pacman -r /mnt --config /mnt/etc/pacman.conf \
+  run pacman -r /mnt --config /mnt/etc/pacman.conf \
     --cachedir /mnt/var/cache/pacman/pkg --hookdir /mnt/etc/pacman.d/hooks \
     --gpgdir /mnt/etc/pacman.d/gnupg --noconfirm "$@"
 }
@@ -47,6 +47,9 @@ function efi-partno {
   local PART=$(fdisk -l "$INSTALLDISK" | grep 'EFI System' | awk '{ print $1 }')
   echo ${PART#${PART%%*([0-9])}}  # Extract digits at the end of string
 }
+
+run pacman --noconfirm -Sy terminus-font ed
+setfont ter-v32
 
 echo 'F A R M B O Y  L I N U X'
 echo 'up to date, fast & clean'
@@ -193,11 +196,10 @@ run swapon '$SWAPFILE'
 
 msg 'Installing the base system (please wait)...'
 run pacstrap /mnt base base-devel
-run pacman --noconfirm -Sy ed os-prober
 
 if [ "$LTSKERNEL" = true ]; then
-  run pacman-chroot -Sy linux-lts
-  run pacman-chroot -R linux
+  pacman-chroot -Sy linux-lts
+  pacman-chroot -R linux
 fi
 
 msg 'Configuring the base system...'
@@ -239,29 +241,52 @@ run echo LANG='$LANG' \>etc/locale.conf
 run echo KEYMAP='$KEYMAP' \>etc/vconsole.conf
 run echo '$HOSTNAME' \>etc/hostname
 
-run pacman-chroot -Sy intel-ucode grub os-prober
-
-RESUME_OFFSET=$(filefrag -v /mnt$SWAPFILE | awk 'NR == 4 { print $4+0 }')
-bak etc/default/grub
-# escape all / in INSTALLDISK
-run ed etc/default/grub <<EOS
-,s/^\(GRUB_CMDLINE_LINUX_DEFAULT="quiet\)/\1 resume=${INSTALLDISK//\//\\/}$INSTALLPART resume_offset=$RESUME_OFFSET/
-,s/^\(GRUB_TIMEOUT=\)5/\1$GRUB_TIMEOUT/
-wq
-EOS
-
-if [ "$EFIPART" ]; then
-  run pacman-chroot -S efibootmgr
-  run grub-install --efi-directory=/mnt/boot --target=x86_64-efi --bootloader-id=grub '${INSTALLDISK}'
-else
-  # GRUB searcher has issues finding ext* partitions after a large NTFS partition
-  # See: https://bbs.archlinux.org/viewtopic.php?id=169650
-  run grub-install --boot-directory=/mnt/boot --target=i386-pc --disk-module=native '${INSTALLDISK}'
+if [ -z "$EFIPART" ]; then
+  pacman-chroot -Sy intel-ucode grub os-prober
 fi
 
 run arch-chroot /mnt <<EOS
-grub-mkconfig -o /boot/grub/grub.cfg
+if [ "$EFIPART" ]; then
+  bootctl --path=/boot install
+else
+  # GRUB searcher has issues finding ext* partitions after a large NTFS partition
+  # See: https://bbs.archlinux.org/viewtopic.php?id=169650
+  grub-install --boot-directory=/boot --target=i386-pc --disk-module=native '${INSTALLDISK}'
+  grub-mkconfig -o /boot/grub/grub.cfg
+fi
 EOS
+
+RESUME_OFFSET=$(filefrag -v /mnt$SWAPFILE | awk 'NR == 4 { print $4+0 }')
+PARTUUID=$(blkid -s PARTUUID -o value $INSTALLDISK$INSTALLPART)
+if [ "$EFIPART" ]; then
+  # TODO: needed as of now? Or auto-generated? TO BE TESTED
+  bak boot/loader/loader.conf
+  run ed boot/loader/loader.conf <<EOS
+,s/^#\(timeout\) 3/\1 $TIMEOUT/
+,s/^\(default\) .*/\1 arch/
+a
+editor 0
+.
+wq
+EOS
+
+  run cat \>boot/loader/entries/arch.conf <<EOS
+title Farmboy Linux
+linux /vmlinuz-linux
+initrd /initramfs-linux.img
+options root=PARTUUID=$PARTUUID rw resume=PARTUUID=$PARTUUID resume_offset=$RESUME_OFFSET
+EOS
+else
+  bak etc/default/grub
+  # If we were to use standard device names
+  # we would need to escape all / in INSTALLDISK
+  # inside ed with: ${INSTALLDISK//\//\\/}
+  run ed etc/default/grub <<EOS
+,s/^\(GRUB_CMDLINE_LINUX_DEFAULT="quiet\)/\1 resume=PARTUUID=$PARTUUID resume_offset=$RESUME_OFFSET/
+,s/^\(GRUB_TIMEOUT=\)5/\1$TIMEOUT/
+wq
+EOS
+fi
 
 bak etc/bash.bashrc
 run cat '>>' etc/bash.bashrc <<EOS
@@ -296,11 +321,12 @@ run ed etc/sudoers <<EOS
 wq
 EOS
 
-# Remove pulseaudio, most users do not need to play two audio streams at once.
-# Changing default soundcard will be done with asoundconf-gtk. No need for
-# pasystray, except for re-routing audio without restarting an application, but
-# this most users can do without. Very few ones need network audio as well.
-pacman-chroot -R pulseaudio pulseaudio-alsa
+# Do not install pulseaudio: most users do not need to play two audio streams
+# at once.  Changing default soundcard will be done with asoundconf-gtk.
+# No need for pasystray, except for re-routing audio without restarting an
+# application, but this most users can do without.
+# Very few ones need network audio as well.
+#pacman-chroot -S pulseaudio pulseaudio-alsa
 
 run cat \>usr/share/libalpm/hooks/confmerge.hook <<EOS
 [Trigger]
@@ -428,7 +454,7 @@ run cat '>>' etc/pacman.conf <<EOS
 SigLevel = Never
 Server = http://repo.archlinux.fr/\$arch
 EOS
-run pacman-chroot -Sy crda openssh ed bash-completion zip unzip \
+pacman-chroot -Sy crda openssh ed bash-completion zip unzip \
   git asp yaourt vim alsa-utils unrar timidity++ soundfont-fluid \
   qrencode tlp tlp-rdw ethtool cups foomatic-db foomatic-db-engine \
   foomatic-db-nonfree cups-filters foomatic-db-nonfree-ppds hplip \
@@ -441,7 +467,7 @@ systemctl mask systemd-rfkill.service systemd-rfkill.socket
 EOS
 
 if [ "$LAMP" = true ]; then
-  run pacman-chroot -S apache php php-apache mariadb
+  pacman-chroot -S apache php php-apache mariadb
   run chmod o+x 'home/$FIRSTUSER'
   run mkdir 'home/$FIRSTUSER/public_html'
   run chown '$FIRSTUSER:$FIRSTUSER' 'home/$FIRSTUSER/public_html'
@@ -482,16 +508,20 @@ EOS
   msg 'After first boot, consider running: # mysql_secure_installation'
 fi
 
-if [ "$VIRTUALBOX" = true ]; then
+if [ "$VIRTUALBOX_HOST" = true ]; then
   if [ "$LTSKERNEL" = true ]; then
-    run pacman-chroot -S virtualbox virtualbox-host-dkms linux-lts-headers
+    pacman-chroot -S virtualbox virtualbox-host-dkms linux-lts-headers
   else
-    run pacman-chroot -S virtualbox virtualbox-host-modules-arch
+    pacman-chroot -S virtualbox virtualbox-host-modules-arch
   fi
   run gpasswd -Q /mnt -a '$FIRSTUSER' vboxusers
 fi
 
-run pacman-chroot -S tlp-rdw
+if [ "$VIRTUALBOX_GUEST" = true; ]; then
+  pacman-chroot -S virtualbox-guest-modules-arch virtualbox-guest-utils
+fi
+
+pacman-chroot -S tlp-rdw
 bak etc/default/tlp
 run ed etc/default/tlp <<EOS
 ,s/^#\(DEVICES_TO_DISABLE_ON_LAN_CONNECT\)/\1/
@@ -516,7 +546,7 @@ run echo a4 '>>' etc/papersize
 
 # The system print dialog already has a "Print to file"
 # option. I do not see a reason to set up a CUPS virtual printer
-#run pacman-chroot -S cups-pdf
+#pacman-chroot -S cups-pdf
 #run mkdir -m700 'var/spool/cups-pdf/$FIRSTUSER'
 #run chown '$FIRSTUSER:$FIRSTUSER' 'var/spool/cups-pdf/$FIRSTUSER'
 ## Prefer absolute target paths, they still work if the link is moved.
@@ -555,7 +585,7 @@ pacman-cleanup
 # Note: needed packages should be listed explicitely even if they are
 # dependencies of other packages, so that they won't be removed by a
 # recursive removal of the the latter
-run pacman-chroot -Sy xorg-server xorg-drivers lightdm lightdm-gtk-greeter \
+pacman-chroot -Sy xorg-server xorg-drivers lightdm lightdm-gtk-greeter \
   ttf-dejavu ttf-ubuntu-font-family artwiz-fonts openbox pcmanfm-gtk3 \
   lilyterm '$BROWSER' asunder filezilla galculator gimp gmrun gnome-keyring \
   gnome-mplayer gnumeric guvcview networkmanager network-manager-applet tint2 \
@@ -567,24 +597,24 @@ run pacman-chroot -Sy xorg-server xorg-drivers lightdm lightdm-gtk-greeter \
   gnome-system-monitor gv gtk3-print-backends oblogout orage xfburn
 
 if [ "$BROWSER" = firefox ]; then
-  run pacman-chroot -S firefox-i18n-$LANGCODE thunderbird thunderbird-i18n-$LANGCODE \
+  pacman-chroot -S firefox-i18n-$LANGCODE thunderbird thunderbird-i18n-$LANGCODE \
     flashplugin
   EMAILCLIENT=thunderbird
 elif [ "$BROWSER" = chromium ]; then
-  run pacman-chroot --noconfirm -S sylpheed
+  pacman-chroot --noconfirm -S sylpheed
   EMAILCLIENT=sylpheed
 else
   EMAILCLIENT=opera
 fi
 
 if [ "$THEMES" = true ]; then
-  run pacman-chroot -S openbox-themes numix-gtk-theme adapta-gtk-theme \
+  pacman-chroot -S openbox-themes numix-gtk-theme adapta-gtk-theme \
     gtk-engine-murrine noto-fonts ttf-roboto arc-gtk-theme arc-icon-theme \
     gnome-themes-standard arc-solid-gtk-theme deepin-gtk-theme \
     gtk-theme-overglossed-hybrid gtk-theme-slickness
 fi
 
-pacman-chroot -S aspell-$LANGCODE 2>/dev/null
+pacman-chroot -S aspell-$LANGCODE 2\>/dev/null
 pacman-cleanup
 
 msg 'Configuring the GUI...'
@@ -985,9 +1015,9 @@ time1_font = monospace 18
 .
 ,s/\(time2_format =\) %A %d %B/\1 /
 ,s/\(clock_tooltip =\) /\1 %A, %d. %B %Y/
-,s/\(clock_rclick_command = \)/\1orage -t/
-,s/\(clock_lclick_command = orage\)/\1 -t/
-,s/\(clock_mclick_command = \)/\1orage -t/
+,s/\(clock_rclick_command =\)/\1 orage -t/
+,s/\(clock_lclick_command =\)/\1 orage -t/
+,s/\(clock_mclick_command =\)/\1 orage -t/
 ,s/\(battery_hide =\) 101/\1 98/
 wq
 EOS
