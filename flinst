@@ -227,7 +227,7 @@ bak etc/{passwd,shadow,group,gshadow}
 run arch-chroot /mnt <<EOS
   groupadd -r autologin
   groupadd -r printadmin
-  useradd -m -G wheel,autologin,lp,optical,printadmin '$FIRSTUSER'
+  useradd -m -G wheel,autologin,lp,optical,printadmin,storage '$FIRSTUSER'
   chpasswd <<<"$FIRSTUSER:$FIRSTUSERPWD" -
 EOS
 
@@ -613,7 +613,7 @@ pacman-chroot -Sy xorg-server xorg-drivers lightdm lightdm-gtk-greeter \
   volumeicon lxappearance-obconf lxinput xfce4-notes-plugin xorg-xrandr \
   accountsservice gksu libreoffice-still calibre lxsession-gtk3 \
   gnome-system-monitor gv gtk3-print-backends oblogout orage xfburn udiskie \
-  light-locker
+  light-locker mousepad
 
 if [ "$BROWSER" = firefox ]; then
   pacman-chroot -S firefox-i18n-$LANGCODE thunderbird thunderbird-i18n-$LANGCODE \
@@ -717,7 +717,7 @@ wq
 EOS
 
 run mkdir etc/skel/.config
-run cat\>etc/skel/.config/mimeapps.list <<EOS
+run cat \>etc/skel/.config/mimeapps.list <<EOS
 [Default Applications]
 application/pdf=xpdf.desktop
 application/postscript=gv.desktop
@@ -736,7 +736,7 @@ video/x-msvideo=gnome-mplayer.desktop
 EOS
 
 run mkdir etc/skel/.config/volumeicon
-run cat\>etc/skel/.config/volumeicon/volumeicon <<EOS
+run cat \>etc/skel/.config/volumeicon/volumeicon <<EOS
 [Alsa]
 card=default
 
@@ -762,9 +762,15 @@ mute_enabled=false
 EOS
 
 run mkdir etc/skel/.config/orage
-run cat\>etc/skel/.config/orage/oragerc <<EOS
+run cat \>etc/skel/.config/orage/oragerc <<EOS
 [PARAMETERS]
 Start visible=false
+EOS
+
+run mkdir etc/skel/.config/gtk-3.0
+run cat \>etc/skel/.config/gtk-3.0/bookmarks <<EOS
+file:///tmp tmp
+file:///home/me/.config/autostart autostart
 EOS
 
 run cat\>etc/X11/xorg.conf.d/70-synaptics.conf <<EOS
@@ -790,20 +796,34 @@ Section "InputClass"
 EndSection
 EOS
 
+# Please note some application packages (e.g. pamac-tray)
+# already put a global autostart desktop file in /etc/xdg/autostart/
+# and in this case you should not try to start them twice,
+# unless the desktop file contains Hidden=true (as it is the case
+# with /etc/xdg/autostart/xfce4-notes-autostart.desktop)
+# In the latter case it should be copied and patched with Hidden=false.
+
+# Applications intended not to be disabled
+# should be autostarted here.
 bak etc/xdg/openbox/autostart
 run cat \>etc/xdg/openbox/autostart <<EOS
 /usr/bin/pcmanfm -d --desktop &
-/usr/bin/nm-applet &
 /usr/bin/volumeicon &
 /usr/bin/udiskie --tray &
-/usr/bin/xfce4-notes &
 /usr/bin/tint2 &
-/usr/bin/light-locker &
 /usr/bin/lxsession &
-/usr/bin/pamac-tray &
-/usr/bin/orage &
-#/usr/bin/lilyterm &
-/usr/bin/$BROWSER &
+EOS
+
+# Applications intended to be optional
+# should be autostarted here using desktop files.
+run mkdir etc/skel/.config/autostart
+run ln -sf /usr/share/applications/xfcalendar.desktop \
+  /usr/share/applications/$BROWSER.desktop \
+  etc/skel/.config/autostart/
+run cp etc/xdf/autostart/xfce4-notes-autostart.desktop etc/skel/.config/autostart/
+run ed etc/skel/.config/autostart/xfce4-notes-autostart.desktop <<EOS
+,s/^\(Hidden\)=true/\1=false/
+wq
 EOS
 
 # Disable automount in pcmanfm since it is done by udiskie
@@ -1144,6 +1164,16 @@ run ed etc/oblogout.conf <<EOS
 wq
 EOS
 
+run cat \>etc/polkit-1/rules.d/00-mount-internal.rules <<'EOS'
+polkit.addRule(function(action, subject) {
+   if ((action.id == "org.freedesktop.udisks2.filesystem-mount-system" &&
+      subject.local && subject.active && subject.isInGroup("storage")))
+      {
+         return polkit.Result.YES;
+      }
+});
+EOS
+
 msg 'Building additional packages from source code...'
 pacman-cleanup
 run arch-chroot /mnt <<EOS
@@ -1182,7 +1212,7 @@ EOB
 done
 EOS
 
-run cat \> etc/skel/.tclshrc <<EOS
+run cat \>etc/skel/.tclshrc <<EOS
 if {$tcl_interactive} {
   package require tclreadline
   ::tclreadline::Loop
