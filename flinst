@@ -75,11 +75,16 @@ msg "Logging to $LOG"
 : >"$LOG"
 
 run pacman --noconfirm -Sy ed dmidecode
-TOTALGB=$(dmidecode --type 17 | awk '/Size:/{ MB += $2 } END { printf "%u\n", MB/1024 }')
+if [ "VIRTUALBOX_GUEST" = true ]; then
+  # TODO: find out a way to get the memory allocated to the VM
+  :
+else
+  TOTALGB=$(dmidecode --type 17 | awk '/Size:/{ MB += $2 } END { printf "%u\n", MB/1024 }')
 
-if [ "$TOTALGB" -lt "$MINGB" ]; then
-  echo "${MINGB}GB of RAM are required, this system only has $TOTALGB. Installation halted!" >&2
-  exit 1
+  if [ "$TOTALGB" -lt "$MINGB" ]; then
+    echo "${MINGB}GB of RAM are required, this system only has $TOTALGB. Installation halted!" >&2
+    exit 1
+  fi
 fi
 
 msg "Setting $KEYMAP keyboard..."
@@ -242,7 +247,7 @@ EOS
 run ln -sf ../usr/share/zoneinfo/'$TIMEZONE' etc/localtime
 run hwclock --systohc
 run arch-chroot /mnt <<EOS
-systemctl enable systemd-timesyncd.service
+systemctl enable systemd-timesyncd
 EOS
 
 bak etc/locale.gen
@@ -298,10 +303,15 @@ editor 0
 wq
 EOS
 
+  if [ "$LTSKERNEL" = true ]; then
+    KERNELTYPE="-lts"
+  else
+    KERNELTYPE=""
+  fi
   run cat \>boot/loader/entries/arch.conf <<EOS
 title Farmboy Linux
-linux /vmlinuz-linux
-initrd /initramfs-linux.img
+linux /vmlinuz-linux$KERNELTYPE
+initrd /initramfs-linux$KERNELTYPE.img
 options root=PARTUUID=$PARTUUID rw resume=PARTUUID=$PARTUUID resume_offset=$RESUME_OFFSET
 EOS
 fi
@@ -479,9 +489,9 @@ pacman-chroot -Sy crda openssh ed bash-completion zip unzip \
   python-pyqt5 splix rsync
 
 run arch-chroot /mnt <<EOS
-systemctl enable tlp tlp-sleep NetworkManager-dispatcher.service \
-  org.cups.cupsd.service
-systemctl mask systemd-rfkill.service systemd-rfkill.socket
+systemctl enable tlp tlp-sleep NetworkManager-dispatcher \
+  org.cups.cupsd
+systemctl mask systemd-rfkill systemd-rfkill.socket
 EOS
 
 if [ "$LAMP" = true ]; then
@@ -536,7 +546,19 @@ if [ "$VIRTUALBOX_HOST" = true ]; then
 fi
 
 if [ "$VIRTUALBOX_GUEST" = true ]; then
-  pacman-chroot -S virtualbox-guest-modules-arch virtualbox-guest-utils
+  if [ "$LTSKERNEL" = true ]; then
+    pacman-chroot -S virtualbox-guest-dkms linux-lts-headers virtualbox-guest-utils
+  else
+    pacman-chroot -S virtualbox-guest-modules-arch virtualbox-guest-utils
+  fi
+  run arch-chroot /mnt <<EOS
+systemctl enable vboxservice
+EOS
+  # This is for shared folder to work out of the box in pacmanf
+  # Just select "Make permanent" and "Auto-mount" when creating
+  # the shared folder in the Virtulbox GUI and you are ready to go.
+  chgrp vboxsf /media
+  run gpasswd -Q /mnt -a '$FIRSTUSER' vboxsf
 fi
 
 pacman-chroot -S tlp-rdw
@@ -620,10 +642,11 @@ if [ "$BROWSER" = firefox ]; then
     flashplugin
   EMAILCLIENT=thunderbird
 elif [ "$BROWSER" = chromium ]; then
-  pacman-chroot --noconfirm -S sylpheed
+  pacman-chroot --noconfirm -S sylpheed pepper-flash
   EMAILCLIENT=sylpheed
 else
   EMAILCLIENT=opera
+  pacman-chroot --noconfirm -S pepper-flash
 fi
 
 if [ "$THEMES" = true ]; then
@@ -820,7 +843,7 @@ run mkdir etc/skel/.config/autostart
 run ln -sf /usr/share/applications/xfcalendar.desktop \
   /usr/share/applications/$BROWSER.desktop \
   etc/skel/.config/autostart/
-run cp etc/xdf/autostart/xfce4-notes-autostart.desktop etc/skel/.config/autostart/
+run cp etc/xdg/autostart/xfce4-notes-autostart.desktop etc/skel/.config/autostart/
 run ed etc/skel/.config/autostart/xfce4-notes-autostart.desktop <<EOS
 ,s/^\(Hidden\)=true/\1=false/
 wq
@@ -1174,6 +1197,10 @@ polkit.addRule(function(action, subject) {
 });
 EOS
 
+# Copy the .config files added to the skell dir manually
+# since we needed to create the account before their addition
+run cp -R etc/skel/.config/* 'home/$FIRSTUSER/.config/'
+
 msg 'Building additional packages from source code...'
 pacman-cleanup
 run arch-chroot /mnt <<EOS
@@ -1219,8 +1246,8 @@ if {$tcl_interactive} {
 }
 EOS
 
-run swapoff '$SWAPFILE'
 cd /
+run swapoff /mnt'$SWAPFILE'
 umount -R /mnt
 msg 'Installation ended successfully. Rebooting...'
 
