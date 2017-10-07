@@ -488,6 +488,13 @@ pacman-chroot -Sy crda openssh ed bash-completion zip unzip \
   foomatic-db-nonfree cups-filters foomatic-db-nonfree-ppds hplip \
   python-pyqt5 splix rsync
 
+bak etc/ssh/sshd_config
+run cat '>>' etc/ssh/sshd_config <<'EOS'
+
+# Allow client to pass locale environment variables
+AcceptEnv LANG LC_*
+EOS
+
 run arch-chroot /mnt <<EOS
 systemctl enable tlp tlp-sleep NetworkManager-dispatcher \
   org.cups.cupsd
@@ -635,7 +642,7 @@ pacman-chroot -Sy xorg-server xorg-drivers lightdm lightdm-gtk-greeter \
   volumeicon lxappearance-obconf lxinput xfce4-notes-plugin xorg-xrandr \
   accountsservice gksu libreoffice-still calibre lxsession-gtk3 \
   gnome-system-monitor gv gtk3-print-backends oblogout orage xfburn udiskie \
-  light-locker mousepad
+  light-locker mousepad x2goserver gtkdialog
 
 if [ "$BROWSER" = firefox ]; then
   pacman-chroot -S firefox-i18n-$LANGCODE thunderbird thunderbird-i18n-$LANGCODE \
@@ -947,7 +954,7 @@ import -border -window $activeWinId ~/Desktop/ss_$(date +%F_%H%M%S_%N).png
 EOS
 run chmod +x usr/local/bin/winscreenshot
 
-run cat \>usr/local/bin/blankscreen <<EOS
+run cat \>usr/local/bin/blankscreen <<'EOS'
 #!/bin/bash
 # http://superuser.com/questions/374637/linux-how-to-turn-off-screen-with-shortcut
 
@@ -957,7 +964,162 @@ sleep 1; xset dpms force off
 EOS
 run chmod +x usr/local/bin/blankscreen
 
-run cat \>usr/share/applications/showdesktop.desktop <<EOS
+run cat \>usr/local/bin/userpwd <<'EOS'
+#!/bin/sh
+# Asks for a user password with using GUI
+# Intended to be used with the -A sudo option
+
+/usr/bin/gksudo -pm "Enter your password to perform administrative tasks"
+EOS
+run chmod +x usr/local/bin/userpwd
+
+run cat \>usr/local/bin/machineuid <<'EOS'
+#!/bin/sh
+# Tries to compute a unique machine id.
+# (c) 2017 Antonio Bonifati "Farmboy" - Released under GPL 3.0
+
+SERIAL=$(sudo -A dmidecode --string baseboard-serial-number)
+[ "$SERIAL" = "0" ] && SERIAL=
+
+if [ -z "$SERIAL" ]; then
+  # 0 on VirtualBox
+  SYSSERIAL=$(sudo -A dmidecode --string system-serial-number)
+  [ "$SYSSERIAL" = "0" ] && SYSSERIAL=
+
+  # The only one available in VirtualBox
+  SYSUUID=$(sudo -A dmidecode --string system-uuid)
+  [ "$SYSUUID" = "0" ] && SYSUUID=
+
+  # Not Specified in VirtualBox
+  CHASSERIAL=$(sudo -A dmidecode --string chassis-serial-number)
+  [ "$CHASSERIAL" = "Not Specified" ] && CHASSERIAL=
+
+  # Empty in VirtualBox
+  CPUID=$(sudo -A dmidecode -t 4 | grep -wP '\tID:' | sed 's/\tID://;s/ //g')
+
+  # Combine all them together and hash to mininize
+  # the possibility of collisions or missing values.
+  # See machine-id(5)
+  SERIAL=$(echo $SYSSERIAL$SYSUUID$CHASSERIAL$CPUID$(cat /etc/machine-id) | sha256sum | awk '{ print $1 }')
+fi
+
+echo $SERIAL
+EOS
+run chmod +x usr/local/bin/machineuid
+
+run cat \>usr/local/bin/supportservice <<'EOF'
+#!/bin/sh
+# P2P Desktop-sharing support solution for Farmboy Linux.
+# Requires gtkdialog.
+# (c) 2017 Antonio Bonifati "Farmboy" - Released under GPL 3.0
+
+SSHDCONF='/etc/ssh/sshd_config'
+export SUDO_ASKPASS='/usr/local/bin/userpwd'
+PROGNAME="$(basename $0)"
+LOCKFILE="${TMPDIR:-/tmp/}$PROGNAME.lock"
+# Currently only DSA (deprecated) and RSA are supported by X2Go Client.
+KEYTYPE="rsa"
+# The private key must be sent to the support service and stored by them as well.
+# Connection using this key is only enabled temporarily during desktop-sharing support.
+KEYFILE="/etc/ssh/ssh_x2go_${KEYTYPE}_key"
+AUTHFILE=~/.ssh/authorized_keys
+
+if [ "$EUID" -eq 0 ]; then
+  echo "$PROGNAME: This script should not be run as the root user!" >&2
+  exit 1
+fi
+
+# Ensure only one instance is running by means of an exclusive lock file.
+(
+  flock -n 200 || { echo "$PROGNAME: already running." >&2; exit 1; }
+
+  atexit() {
+    # Restore sshd configuration as it was before
+    # We could also just make a backup copy and restore that.
+    if [ "$X11FORWARDLINE" ]; then
+      sudo -A ed "$SSHDCONF" <<EOS
+,s/^#*X11Forwarding.*/$X11FORWARDLINE/
+wq
+EOS
+    else
+      sudo -A sed -i '/^X11Forwarding yes$/d' "$SSHDCONF"
+    fi
+    
+    # Stop/reload sshd.
+    if [ "SSHDACTIVE" ]; then
+      sudo -A systemctl reload sshd
+    else
+      sudo -A systemctl stop sshd
+    fi
+    
+    # Stop x2go if it wasn't active.
+    if [ "X2GOSTOPPED" ]; then
+      sudo -A systemctl stop x2goserver
+    fi
+
+    # Disable connection key.
+    sed -i "/^${PUBKEY//\//\\/}/d" "$AUTHFILE"
+
+    # Close the session.
+    pkill x2goagent
+  }
+  trap atexit INT TERM EXIT
+
+  # Amend sshd configuration to enable X11 forwarding.
+  X11FORWARDLINE="$(sed -ne '/^#*X11Forwarding/p' "$SSHDCONF")"
+  if [ "$X11FORWARDLINE" ]; then
+    sudo -A ed "$SSHDCONF" <<EOS
+,s/^#*\(X11Forwarding\).*/\1 yes/
+wq
+EOS
+  else
+    sudo -A echo 'X11Forwarding yes' '>>' "$SSHDCONF"
+  fi
+  
+  # Make sure sshd is active with new configuration.
+  if systemctl -q is-active sshd; then
+    SSHDACTIVE=yes
+    sudo -A systemctl reload sshd
+  else
+    sudo -A systemctl start sshd
+  fi
+  
+  # Start x2goserver if not already active.
+  if ! systemctl -q is-active x2goserver; then
+    X2GOSTOPPED=yes
+    sudo -A systemctl start x2goserver
+  fi
+
+  # Enable connection key.
+  PUBKEY="$(cat "$KEYFILE".pub)"
+  echo "$PUBKEY" >> "$AUTHFILE"
+
+  export MAIN_DIALOG='
+<window title="Farmboy Linux Live Support Service" icon-name="gnomehelp" resizable="true">
+ <vbox>
+  <text wrap="true">
+   <label>Remote desktop connection enabled.</label>
+  </text>
+  <text wrap="true">
+   <label>Support can connect from now on.</label>
+  </text>
+  <text wrap="true">
+   <label>Please leave this open throughout the support session.</label>
+  </text>
+  <button>
+   <label>Remember to click here at the end of the support session</label>
+   <action type="exit">OK</action>
+  </button>
+ </vbox>
+</window>
+'
+  gtkdialog --program=MAIN_DIALOG --center
+
+) 200>"$LOCKFILE"
+EOF
+run chmod +x usr/local/bin/supportservice
+
+run cat \>usr/share/applications/showdesktop.desktop <<'EOS'
 [Desktop Entry]
 Name=Show Desktop
 GenericName=Minimizer
@@ -969,7 +1131,7 @@ StartupNotify=false
 NoDisplay=true
 EOS
 
-run cat \>usr/share/applications/obreload.desktop <<EOS
+run cat \>usr/share/applications/obreload.desktop <<'EOS'
 [Desktop Entry]
 Name=Window Manager Reload
 GenericName=Window Manager Reconfiguration
@@ -1068,7 +1230,7 @@ run cat \>etc/xdg/openbox/menu.xml <<EOS
 </openbox_menu>
 EOS
 
-run cat \>usr/share/applications/startmenu.desktop <<EOS
+run cat \>usr/share/applications/startmenu.desktop <<'EOS'
 [Desktop Entry]
 Name=Open AppMenu
 GenericName=Start menu
@@ -1081,7 +1243,7 @@ NoDisplay=true
 EOS
 
 bak etc/xdg/tint2/tint2rc
-run ed etc/xdg/tint2/tint2rc <<EOS
+run ed etc/xdg/tint2/tint2rc <<'EOS'
 ,s/\(border_width =\) 0/\1 1/
 ,s/\(panel_items = LTS\)C/\1BC/
 ,s/\(autohide_show_timeout =\) 0/\1 0.3/
@@ -1117,12 +1279,12 @@ EOS
 
 # Use clearer generic names for desktop configuration tools.
 bak usr/share/applications/tint2conf.desktop
-run ed usr/share/applications/tint2conf.desktop <<EOS
+run ed usr/share/applications/tint2conf.desktop <<'EOS'
 ,s/\(Name\)=Tint2 Settings/\1=Taskbar Manager/
 wq
 EOS
 bak usr/share/applications/obconf.desktop
-run ed usr/share/applications/obconf.desktop <<EOS
+run ed usr/share/applications/obconf.desktop <<'EOS'
 ,s/\(Name\)=Openbox Configuration Manager/\1=Window Manager/
 a
 Name[it]=Gestore delle finestre
@@ -1131,7 +1293,7 @@ wq
 EOS
 
 bak usr/share/applications/tint2.desktop
-run ed usr/share/applications/tint2.desktop <<EOS
+run ed usr/share/applications/tint2.desktop <<'EOS'
 a
 NoDisplay=true
 .
@@ -1174,7 +1336,7 @@ EOF
 run chmod +x usr/local/bin/setavatar
 
 bak etc/profile.d/freetype2.sh
-run ed etc/profile.d/freetype2.sh <<EOS
+run ed etc/profile.d/freetype2.sh <<'EOS'
 ,s/^#\(export FREETYPE_PROPERTIES="truetype:interpreter-version\)=40"/\1=38"/
 wq
 EOS
@@ -1182,7 +1344,7 @@ run ln -sf ../conf.avail/10-sub-pixel-rgb.conf etc/fonts/conf.d/
 run ln -sf ../conf.avail/11-lcdfilter-default.conf etc/fonts/conf.d/
 
 bak etc/oblogout.conf
-run ed etc/oblogout.conf <<EOS
+run ed etc/oblogout.conf <<'EOS'
 ,s/^\(lock\) = xtrlock &/\1 = light-locker-command -l/
 wq
 EOS
@@ -1200,6 +1362,13 @@ EOS
 # Copy the .config files added to the skell dir manually
 # since we needed to create the account before their addition
 run cp -R etc/skel/.config/* 'home/$FIRSTUSER/.config/'
+
+run arch-chroot /mnt <<'EOS'
+x2godbadmin --createdb
+EOS
+
+# Generate SSH connection keys for X2go remote support
+run ssh-keygen -q -t '$KEYTYPE' -C '$KEYCOMMENT' -f '/mnt$KEYFILE' -N ''
 
 msg 'Building additional packages from source code...'
 pacman-cleanup
