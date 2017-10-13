@@ -1119,6 +1119,122 @@ EOS
 EOF
 run chmod +x usr/local/bin/supportservice
 
+run cat \>usr/local/bin/supportrequest <<'EOF'
+#!/bin/sh
+# Send a support request for Farmboy Linux.
+# Requires gtkdialog.
+# (c) 2017 Antonio Bonifati "Farmboy" - Released under GPL 3.0
+
+MACHINEUID=$(/usr/local/bin/machineuid)
+SUPPORTURL="http://farmboylinux.tk/supportrequest.php"
+
+# From http://gist.github.com/cdown/1163649
+urlencode() {
+    # urlencode <string>
+    old_lc_collate=$LC_COLLATE
+    LC_COLLATE=C
+
+    local length="${#1}"
+    for (( i = 0; i < length; i++ )); do
+        local c="${1:i:1}"
+        case $c in
+            [a-zA-Z0-9.~_-]) printf "$c" ;;
+            *) printf '%%%02X' "'$c" ;;
+        esac
+    done
+
+    LC_COLLATE=$old_lc_collate
+}
+
+while true; do
+  echo "$PROBLEMDESC"
+  PDTAG="$([ "$PROBLEMDESC" ] && echo "<default>\"$PROBLEMDESC\"</default>")"
+  ETAG="$([ "$EMAIL" ] && echo "<default>$EMAIL</default>")"
+  OCTAG="$([ "$OTHERCONTACTS" ] && echo "<default>\"$OTHERCONTACTS\"</default>")"
+
+  export MAIN_DIALOG=$(cat <<EOS
+<window title="Farmboy Linux Support Request" icon-name="gtk-help" resizable="true">
+ <vbox spacing="10">
+  <text wrap="true">
+   <label>Fill and send this support request module and we will get back to you.</label>
+  </text>
+  <text wrap="true">
+   <label>Only fields marked with * are mandatory.</label>
+  </text>
+  <text wrap="true">
+   <label>Your machine ID for support is $MACHINEUID</label>
+  </text>
+  <text wrap="true">
+   <label>Of course you will need to be connected to the Internet</label>
+  </text>
+  <frame Write a description of the problem>
+   <edit>
+    $PDTAG
+    <variable>PROBLEMDESC</variable>
+    <height>150</height>
+   </edit>
+  </frame>
+  <frame Your contacts>
+   <hbox>
+    <text>
+      <label>email *</label>
+    </text>
+    <entry>
+     $ETAG
+     <variable>EMAIL</variable>
+    </entry>
+   </hbox>
+   <text wrap="true">
+    <label>availability and/or other contacts (text/audio chat, phones)</label>
+   </text>
+   <edit>
+    $OCTAG
+    <variable>OTHERCONTACTS</variable>
+    <width>300</width>
+    <height>100</height>
+   </edit>
+  </frame>
+  <hbox>
+   <button cancel></button>
+   <button>
+    <label>Send support request</label>
+    <action type="exit">OK</action>
+   </button>
+  </hbox>
+ </vbox>
+</window>
+EOS
+)
+
+  eval "$(gtkdialog --program MAIN_DIALOG --center)"
+
+  if [ "$EXIT" = Cancel ]; then
+    exit
+  fi
+
+  EMAIL=${EMAIL//[[:space:]]/}
+  OLDIFS=$IFS; IFS=@
+  set -- $EMAIL
+  IFS=$OLFIFS
+  if [ $# -ne 2 ]; then
+    export ERR_DIALOG="
+<vbox>
+ <text>
+  <label>Invalid email address $EMAIL</label>
+ </text>
+ <button ok></button>
+ </vbox>
+"
+    gtkdialog --program=ERR_DIALOG --center
+  else
+    break
+  fi
+done
+
+xdg-open "$SUPPORTURL?machineuid=$MACHINEUID&problemdesc=$(urlencode "$PROBLEMDESC")&email=$(urlencode "$EMAIL")&othercontacts=$(urlencode "$OTHERCONTACTS")"
+EOF
+run chmod +x usr/local/bin/supportrequest
+
 run cat \>usr/share/applications/showdesktop.desktop <<'EOS'
 [Desktop Entry]
 Name=Show Desktop
