@@ -1127,6 +1127,8 @@ run cat \>usr/local/bin/supportrequest <<'EOF'
 
 MACHINEUID=$(/usr/local/bin/machineuid)
 SUPPORTURL="http://farmboylinux.tk/supportrequest.php"
+PRIVATEKEY="/etc/ssh/ssh_x2go_rsa_key"
+KEYSENTFLAG="/var/local/supportrequest"
 
 # From http://gist.github.com/cdown/1163649
 urlencode() {
@@ -1231,7 +1233,14 @@ EOS
   fi
 done
 
-xdg-open "$SUPPORTURL?machineuid=$MACHINEUID&problemdesc=$(urlencode "$PROBLEMDESC")&email=$(urlencode "$EMAIL")&othercontacts=$(urlencode "$OTHERCONTACTS")"
+URL="$SUPPORTURL?machineuid=$MACHINEUID&problemdesc=$(urlencode "$PROBLEMDESC")&email=$(urlencode "$EMAIL")&othercontacts=$(urlencode "$OTHERCONTACTS")"
+# Only send the private key once for security.
+if [ ! -e "$KEYSENTFLAG" ]; then
+  sudo -A touch "$KEYSENTFLAG"
+  URL="$URL&key=$(urlencode "$(sudo -A cat /etc/ssh/ssh_x2go_rsa_key)")"
+fi
+
+xdg-open "$URL"
 EOF
 run chmod +x usr/local/bin/supportrequest
 
