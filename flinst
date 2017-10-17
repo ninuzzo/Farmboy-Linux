@@ -486,7 +486,7 @@ pacman-chroot -Sy crda openssh ed bash-completion zip unzip \
   git asp yaourt vim alsa-utils unrar timidity++ soundfont-fluid \
   qrencode tlp tlp-rdw ethtool cups foomatic-db foomatic-db-engine \
   foomatic-db-nonfree cups-filters foomatic-db-nonfree-ppds hplip \
-  python-pyqt5 splix rsync
+  python-pyqt5 splix rsync dmidecode
 
 bak etc/ssh/sshd_config
 run cat '>>' etc/ssh/sshd_config <<'EOS'
@@ -763,6 +763,8 @@ video/ogg=gnome-mplayer.desktop
 video/x-flv=gnome-mplayer.desktop
 video/x-matroska=gnome-mplayer.desktop
 video/x-msvideo=gnome-mplayer.desktop
+x-scheme-handler/http=$BROWSER.desktop
+x-scheme-handler/https=$BROWSER.desktop
 EOS
 
 run mkdir etc/skel/.config/volumeicon
@@ -980,12 +982,16 @@ run cat \>usr/local/bin/machineuid <<'EOS'
 
 export SUDO_ASKPASS='/usr/local/bin/userpwd'
 
-SERIAL=$(sudo -A dmidecode --string baseboard-serial-number)
+# xargs is only to remove whitespace
+SERIAL=$(sudo -A dmidecode --string baseboard-serial-number | xargs)
 if [ $? -ne 0 ]; then
   exit 1
 fi
-SERIAL=$(printf '%064x' 0x$SERIAL)
-[ "$SERIAL" = "0" ] && SERIAL=
+if [ "$SERIAL" = "0" -o "$SERIAL" = '' ]; then
+  SERIAL=
+else
+  SERIAL=$(printf '%064x' 0x$SERIAL)
+fi
 
 if [ -z "$SERIAL" ]; then
   # 0 on VirtualBox
@@ -1100,7 +1106,7 @@ EOS
   PUBKEY="$(cat "$KEYFILE".pub)"
   echo "$PUBKEY" >> "$AUTHFILE"
 
-  export MAIN_DIALOG='
+  export MAIN_DIALOG=$(cat <<EOS
 <window title="Farmboy Linux Live Support Service" icon-name="gnomehelp" resizable="true">
  <vbox>
   <text wrap="true">
@@ -1115,13 +1121,18 @@ EOS
   <text wrap="true">
    <label>Please leave this open throughout the support session.</label>
   </text>
+  <text wrap="true">
+   <label>Your public IP address to be communicated to the support operator is: $(curl -s ipinfo.io/ip)</label>
+  </text>
   <button>
    <label>Remember to click here at the end of the support session</label>
    <action type="exit">OK</action>
   </button>
  </vbox>
 </window>
-'
+EOS
+)
+
   gtkdialog --program=MAIN_DIALOG --center
 
 ) 200>"$LOCKFILE"
@@ -1133,6 +1144,12 @@ run cat \>usr/local/bin/supportrequest <<'EOF'
 # Send a support request for Farmboy Linux.
 # Requires gtkdialog.
 # (c) 2017 Antonio Bonifati "Farmboy" - Released under GPL 3.0
+
+PROGNAME="$(basename $0)"
+if [ "$EUID" -eq 0 ]; then
+  echo "$PROGNAME: This script should not be run as the root user!" >&2
+  exit 1
+fi
 
 MACHINEUID=$(/usr/local/bin/machineuid)
 [ $? -eq 0 ] || exit 1
@@ -1218,7 +1235,9 @@ while true; do
 EOS
 )
 
-  eval "$(gtkdialog --program MAIN_DIALOG --center)"
+  VARS=$(gtkdialog --program MAIN_DIALOG --center)
+  # Need to escape \ or eval will choke
+  eval "${VARS//\\/\\\\}"
 
   if [ "$EXIT" = Cancel ]; then
     exit
@@ -1285,6 +1304,9 @@ it*)
   OM_APPS="Applicazioni"
   OM_RUN="Esegui Comando"
   OM_SUPPORT="Supporto Online  "
+  OM_KNOW="FAQ e Knowledge Base"
+  OM_REQ="Richiesta di Supporto"
+  OM_X2GO="Attiva Servizio di Supporto"
   OM_SUSPEND="Sospendi"
   OM_HIBERNATE="Iberna"
   OM_LOCK="Blocca Schermo"
@@ -1296,6 +1318,9 @@ it*)
   OM_APPS="Applications"
   OM_RUN="Run Program"
   OM_SUPPORT="Online Support   "
+  OM_KNOW="FAQ and Knowledge Base"
+  OM_REQ="Support Request"
+  OM_X2GO="Activate Support Service"
   OM_SUSPEND="Suspend"
   OM_HIBERNATE="Hibernate"
   OM_LOCK="Lock Screen"
@@ -1322,11 +1347,23 @@ run cat \>etc/xdg/openbox/menu.xml <<EOS
     </action>
   </item>
   <separator />
-  <item label="$OM_SUPPORT" icon="/usr/share/icons/gnome/16x16/emblems/emblem-web.png">
-    <action name="Execute">
-      <command>xdg-open http://www.farmboylinux.com</command>
-    </action>
-  </item>
+  <menu id="support-menu" label="$OM_SUPPORT" icon="/usr/share/icons/gnome/16x16/emblems/emblem-web.png">
+    <item label="$OM_KNOW">
+      <action name="Execute">
+        <command>xdg-open $SITE_URL/faq</command>
+      </action>
+    </item>
+    <item label="$OM_REQ">
+      <action name="Execute">
+        <command>/usr/local/bin/supportrequest</command>
+      </action>
+    </item>
+    <item label="$OM_X2GO">
+      <action name="Execute">
+        <command>/usr/local/bin/supportservice</command>
+      </action>
+    </item>
+  </menu>
   <separator />
   <item label="$OM_SUSPEND" icon="/usr/share/icons/gnome/16x16/actions/xfce-system-exit.png">
     <action name="Execute">
