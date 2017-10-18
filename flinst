@@ -239,7 +239,6 @@ EOS
 bak etc/fstab
 run genfstab -U /mnt '>>' etc/fstab
 run ed etc/fstab <<EOS
-,s/^\/mnt//
 ,s/relatime/noatime/g
 wq
 EOS
@@ -285,9 +284,11 @@ if [ "$EFIPART" ]; then
 else
   grub-mkconfig -o /boot/grub/grub.cfg
 
-  # GRUB searcher has issues finding ext* partitions after a large NTFS partition
+  # TODO: GRUB searcher has issues finding ext* partitions after a large NTFS partition
   # See: https://bbs.archlinux.org/viewtopic.php?id=169650
-  grub-install --boot-directory=/boot --target=i386-pc --disk-module=native '$INSTALLDISK'
+  # in this case --disk-module=native may be needed
+  # but it looks like does not work in other situations
+  grub-install --boot-directory=/boot --target=i386-pc '$INSTALLDISK'
 fi
 EOS
 
@@ -707,6 +708,7 @@ EOS
 bak etc/lightdm/lightdm-gtk-greeter.conf
 run ed etc/lightdm/lightdm-gtk-greeter.conf <<EOS
 ,s/^#\(background=\)/\1\/usr\/share\/pixmaps\/farmboy_linux.jpg/
+,s/^#\(position=\)/\150% 60%/
 wq
 EOS
 cd -
@@ -1534,13 +1536,15 @@ EOS
 # Copy the .config files added to the skell dir manually
 # since we needed to create the account before their addition
 run cp -R etc/skel/.config/* 'home/$FIRSTUSER/.config/'
+# Do not forget to fix permissions
+run chown -R '$FIRSTUSER:$FIRSTUSER' 'home/$FIRSTUSER/.config/'
 
 run arch-chroot /mnt <<'EOS'
 x2godbadmin --createdb
 EOS
 
 # Generate SSH connection keys for X2go remote support
-run ssh-keygen -q -t '$KEYTYPE' -C '$KEYCOMMENT' -f '/mnt$KEYFILE' -N ''
+run ssh-keygen -q -t '$KEYTYPE' -C '$KEYCOMMENT' -f '/mnt$KEYFILE' -N "''"
 
 msg 'Building additional packages from source code...'
 pacman-cleanup
@@ -1572,7 +1576,7 @@ for pkg in "\${pkgs[@]}"; do
 EOB
 
   # Install as root
-  pacman --noconfirm -U "\$pkg/\$pkg-\$pkgver-\$pkgrel-"*.pkg.tar.xz
+  pacman --noconfirm -U "\$pkg/\$pkg-${epoch:+$epoch:}\$pkgver-\$pkgrel-"*.pkg.tar.xz
 
   # Clean up to free disk space right away
   # although cleaning of /tmp is done by arch-chroot on exit
@@ -1587,6 +1591,7 @@ if {$tcl_interactive} {
 }
 EOS
 
+pacman-cleanup
 cd /
 run swapoff /mnt'$SWAPFILE'
 umount -R /mnt
