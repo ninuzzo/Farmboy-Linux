@@ -75,7 +75,7 @@ msg "Logging to $LOG"
 : >"$LOG"
 
 run pacman --noconfirm -Sy ed dmidecode
-if [ "VIRTUALBOX_GUEST" = true ]; then
+if [ "$VIRTUALBOX_GUEST" = true ]; then
   # TODO: find out a way to get the memory allocated to the VM
   :
 else
@@ -644,6 +644,12 @@ pacman-chroot -Sy xorg-server xorg-drivers lightdm lightdm-gtk-greeter \
   accountsservice gksu libreoffice-still calibre lxsession-gtk3 \
   gnome-system-monitor gv gtk3-print-backends oblogout orage xfburn udiskie \
   light-locker mousepad x2goserver gtkdialog
+
+# TODO: does not work with language variants.
+LANGCODE=${LANG%%_*}
+if [ "$LANGCODE" != en ]; then
+  pacman-chroot -S libreoffice-still-$LANGCODE
+fi
 
 if [ "$BROWSER" = firefox ]; then
   pacman-chroot -S firefox-i18n-$LANGCODE thunderbird thunderbird-i18n-$LANGCODE \
@@ -1536,10 +1542,10 @@ EOS
 # Copy the .config files added to the skell dir manually
 # since we needed to create the account before their addition
 run cp -R etc/skel/.config/* 'home/$FIRSTUSER/.config/'
+run arch-chroot /mnt <<EOS
 # Do not forget to fix permissions
-run chown -R '$FIRSTUSER:$FIRSTUSER' 'home/$FIRSTUSER/.config/'
+chown -R '$FIRSTUSER:$FIRSTUSER' 'home/$FIRSTUSER/.config/'
 
-run arch-chroot /mnt <<'EOS'
 x2godbadmin --createdb
 EOS
 
