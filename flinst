@@ -50,6 +50,11 @@ function efi-partno {
 }
 
 function checks {
+  if ! grep -L -w lm /proc/cpuinfo; then
+    echo 'Sorry, but your system is too old. A 64-bit CPU is needed.'
+    exit 1
+  fi
+
   run pacman --noconfirm -Sy ed dmidecode
   if [ "$VIRTUALBOX_GUEST" = true ]; then
     # TODO: find out a way to get the memory allocated to the VM
