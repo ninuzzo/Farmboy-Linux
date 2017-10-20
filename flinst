@@ -246,6 +246,14 @@ EOS
   fi
 }
 
+function generate_fstab {
+  run genfstab -U /mnt '>>' etc/fstab
+  run ed etc/fstab <<EOS
+,s/relatime/noatime/g
+wq
+EOS
+}
+
 function base_system {
   msg 'Installing the base system (please wait)...'
   run pacstrap /mnt base base-devel
@@ -268,11 +276,7 @@ chpasswd <<<"$FIRSTUSER:$FIRSTUSERPWD" -
 EOS
   
   bak etc/fstab
-  run genfstab -U /mnt '>>' etc/fstab
-  run ed etc/fstab <<EOS
-,s/relatime/noatime/g
-wq
-EOS
+  generate_fstab
   
   run ln -sf ../usr/share/zoneinfo/'$TIMEZONE' etc/localtime
   run hwclock --systohc
