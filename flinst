@@ -49,61 +49,33 @@ function efi-partno {
   echo ${PART#${PART%%*([0-9])}}  # Extract digits at the end of string
 }
 
-# Made with figlet
-cat <<'EOS'
- _____                    _                   _     _                  
-|  ___|_ _ _ __ _ __ ___ | |__   ___  _   _  | |   (_)_ __  _   ___  __
-| |_ / _` | '__| '_ ` _ \| '_ \ / _ \| | | | | |   | | '_ \| | | \ \/ /
-|  _| (_| | |  | | | | | | |_) | (_) | |_| | | |___| | | | | |_| |>  < 
-|_|  \__,_|_|  |_| |_| |_|_.__/ \___/ \__, | |_____|_|_| |_|\__,_/_/\_\
-                                      |___/                            
-EOS
-
-echo 'F A R M B O Y  L I N U X'
-echo 'up to date, fast & clean'
-echo 'GPL (c) Antonio Bonifati'
-
-msg 'Loading configuration...'
-# Remove extension from this script filename (currently none)
-#BASE=${0%.*}
-BASE=$0
-. "$BASE.conf"
-LANGCODE=${LANG%_*}
-
-LOG="$(readlink -f $BASE.log)"
-msg "Logging to $LOG"
-: >"$LOG"
-
-run pacman --noconfirm -Sy ed dmidecode
-if [ "$VIRTUALBOX_GUEST" = true ]; then
-  # TODO: find out a way to get the memory allocated to the VM
-  :
-else
-  TOTALGB=$(dmidecode --type 17 | awk '/Size:/{ MB += $2 } END { printf "%u\n", MB/1024 }')
-
-  if [ "$TOTALGB" -lt "$MINGB" ]; then
-    echo "${MINGB}GB of RAM are required, this system only has $TOTALGB. Installation halted!" >&2
-    exit 1
+function checks {
+  run pacman --noconfirm -Sy ed dmidecode
+  if [ "$VIRTUALBOX_GUEST" = true ]; then
+    # TODO: find out a way to get the memory allocated to the VM
+    :
+  else
+    TOTALGB=$(dmidecode --type 17 | awk '/Size:/{ MB += $2 } END { printf "%u\n", MB/1024 }')
+  
+    if [ "$TOTALGB" -lt "$MINGB" ]; then
+      echo "${MINGB}GB of RAM are required, this system only has $TOTALGB. Installation halted!" >&2
+      exit 1
+    fi
   fi
-fi
+}
 
-msg "Setting $KEYMAP keyboard..."
-run loadkeys '$KEYMAP'
-
-msg 'Updating system clock...'
-run timedatectl set-ntp true
-
-msg 'Partioning...'
-for n in "$INSTALLDISK"*; do umount $n 2>/dev/null; done
-
-if [ "$ALLDISK" = true ]; then
-  if [ -d '/sys/firmware/efi' ]; then
-    # Installation disk booted in EUFI, use modern UEFI boot
-    # (since it is supported) along with modern GPT partition scheme,
-    # which allows disks to be bigger than 2TB.
-    EFIPART=1
-    INSTALLPART=2
-    run fdisk '$INSTALLDISK' <<EOS
+function partition {
+  msg 'Partioning...'
+  for n in "$INSTALLDISK"*; do umount $n 2>/dev/null; done
+  
+  if [ "$ALLDISK" = true ]; then
+    if [ -d '/sys/firmware/efi' ]; then
+      # Installation disk booted in EUFI, use modern UEFI boot
+      # (since it is supported) along with modern GPT partition scheme,
+      # which allows disks to be bigger than 2TB.
+      EFIPART=1
+      INSTALLPART=2
+      run fdisk '$INSTALLDISK' <<EOS
 g
 n
 $EFIPART
@@ -119,10 +91,10 @@ $INSTALLPART
 Y
 w
 EOS
-  else
-    INSTALLPART=1
-    # Use MBR boot and DOS MBR partition scheme
-    run fdisk '$INSTALLDISK' <<EOS
+    else
+      INSTALLPART=1
+      # Use MBR boot and DOS MBR partition scheme
+      run fdisk '$INSTALLDISK' <<EOS
 o
 n
 p
@@ -132,15 +104,15 @@ $INSTALLPART
 Y
 w
 EOS
-  fi
-else
-  PARTYPE=$(fdisk -l "$INSTALLDISK" | grep 'Disklabel type:' | awk '{ print $3 }')
-  if [ "$PARTYPE" = gpt ]; then
-    # Assume GTP usage means EFI usage. This is always true for Windows.
-    # Look for EFI system partition number or create a new one if not found
-    EFIPART=$(efi-partno)
-    if [ -z "$EFIPART" ]; then
-      run fdisk '$INSTALLDISK' <<EOS
+    fi
+  else
+    PARTYPE=$(fdisk -l "$INSTALLDISK" | grep 'Disklabel type:' | awk '{ print $3 }')
+    if [ "$PARTYPE" = gpt ]; then
+      # Assume GTP usage means EFI usage. This is always true for Windows.
+      # Look for EFI system partition number or create a new one if not found
+      EFIPART=$(efi-partno)
+      if [ -z "$EFIPART" ]; then
+        run fdisk '$INSTALLDISK' <<EOS
 n
 $EFIPART
 
@@ -150,39 +122,39 @@ t
 1
 w
 EOS
-      partprobe 2>/dev/null
-      EFIPART=$(efi-partno)
-    fi
-  fi
-  
-  # Create a new partition to install to in free space
-  # unless asked to install in an existing partition.
-  if [ -z "$INSTALLPART" ]; then
-    # It looks like parted reports free space as a power of 1000,
-    # not 1024 because it reports a higher number.
-    FREESLOTS=($(parted "$INSTALLDISK" unit GB print free | grep 'Free Space' |
-      awk '{ printf "%u\n", $3*1000*1000*1000/1024/1024/1024 }'))
-    FOUND=
-    for FREEGB in "${FREESLOTS[@]}"; do
-      if [ "$FREEGB" -ge "$MINGB" ]; then
-        FOUND=true
-	break
+        partprobe 2>/dev/null
+        EFIPART=$(efi-partno)
       fi
-    done
-
-    if [ -z "$FOUND" ]; then
-      echo "Error: you need at let ${MINGB}GB free on $INSTALLDISK. Installation halted!" >&2
-      exit 1
     fi
-
-    # Determine the partition number from fdisk default
-    # No more need to make the linux partition bootable (just informative),
-    # so we better do not do it, since there could be another os's (i.e. windows)
-    # bootable partition and we cannot have two.
-    # BUG: does not support creation of extented partitions
-    # maybe expect is needed here for that, but it is old
-    # stuff we do not bother to support.
-    INSTALLPART=$(fdisk "$INSTALLDISK" 2>/dev/null <<EOS |
+    
+    # Create a new partition to install to in free space
+    # unless asked to install in an existing partition.
+    if [ -z "$INSTALLPART" ]; then
+      # It looks like parted reports free space as a power of 1000,
+      # not 1024 because it reports a higher number.
+      FREESLOTS=($(parted "$INSTALLDISK" unit GB print free | grep 'Free Space' |
+        awk '{ printf "%u\n", $3*1000*1000*1000/1024/1024/1024 }'))
+      FOUND=
+      for FREEGB in "${FREESLOTS[@]}"; do
+        if [ "$FREEGB" -ge "$MINGB" ]; then
+          FOUND=true
+  	break
+        fi
+      done
+  
+      if [ -z "$FOUND" ]; then
+        echo "Error: you need at let ${MINGB}GB free on $INSTALLDISK. Installation halted!" >&2
+        exit 1
+      fi
+  
+      # Determine the partition number from fdisk default
+      # No more need to make the linux partition bootable (just informative),
+      # so we better do not do it, since there could be another os's (i.e. windows)
+      # bootable partition and we cannot have two.
+      # BUG: does not support creation of extented partitions
+      # maybe expect is needed here for that, but it is old
+      # stuff we do not bother to support.
+      INSTALLPART=$(fdisk "$INSTALLDISK" 2>/dev/null <<EOS |
 n
 
 
@@ -191,94 +163,50 @@ n
 Y
 w
 EOS
-     sed -rn 's/^Partition number \([-0-9,]+, default ([0-9]+)\):.*|^Selected partition ([0-9]+).*/\1\2/p')
-  else
-    PARTGB=$(lsblk "$INSTALLDISK$INSTALLPART" | tail -n1 | awk '{ printf "%u\n", $4 }')
-    if [ "$PARTGB" -lt "$MINGB" ]; then
-      echo "Error: you need at least ${MINGB}GB free on $INSTALLDISK, but partition $INSTALLDISK$INSTALLPART is only ${PARTGB}GB. Installation halted!"
-      exit 1
+       sed -rn 's/^Partition number \([-0-9,]+, default ([0-9]+)\):.*|^Selected partition ([0-9]+).*/\1\2/p')
+    else
+      PARTGB=$(lsblk "$INSTALLDISK$INSTALLPART" | tail -n1 | awk '{ printf "%u\n", $4 }')
+      if [ "$PARTGB" -lt "$MINGB" ]; then
+        echo "Error: you need at least ${MINGB}GB free on $INSTALLDISK, but partition $INSTALLDISK$INSTALLPART is only ${PARTGB}GB. Installation halted!"
+        exit 1
+      fi
     fi
   fi
-fi
+  
+  partprobe 2>/dev/null
+  run mkfs.ext4 -F '$INSTALLDISK$INSTALLPART'
+  run mount '$INSTALLDISK$INSTALLPART' /mnt
+  if [ "$EFIPART" ]; then
+    run mkfs.fat -F32 '$INSTALLDISK$EFIPART'
+    mkdir /mnt/boot
+    run mount '$INSTALLDISK$EFIPART' /mnt/boot
+  fi
+  cd /mnt
+  SWAPFILE="${SWAPFILE#/}"
+  run fallocate -l '$(head -n1 /proc/meminfo | awk "{ print \$2 }")K' '$SWAPFILE'
+  run chmod 600 '$SWAPFILE'
+  run mkswap '$SWAPFILE'
+  run swapon '$SWAPFILE'
+}
 
-partprobe 2>/dev/null
-run mkfs.ext4 -F '$INSTALLDISK$INSTALLPART'
-run mount '$INSTALLDISK$INSTALLPART' /mnt
-if [ "$EFIPART" ]; then
-  run mkfs.fat -F32 '$INSTALLDISK$EFIPART'
-  mkdir /mnt/boot
-  run mount '$INSTALLDISK$EFIPART' /mnt/boot
-fi
-cd /mnt
-SWAPFILE="${SWAPFILE#/}"
-run fallocate -l '$(head -n1 /proc/meminfo | awk "{ print \$2 }")K' '$SWAPFILE'
-run chmod 600 '$SWAPFILE'
-run mkswap '$SWAPFILE'
-run swapon '$SWAPFILE'
-
-msg 'Installing the base system (please wait)...'
-run pacstrap /mnt base base-devel
-
-if [ "$LTSKERNEL" = true ]; then
-  pacman-chroot -Sy linux-lts
-  pacman-chroot -R linux
-fi
-
-msg 'Configuring the base system...'
-
-bak etc/{passwd,shadow,group,gshadow}
-
-# -R /mnt causes segfault in groupadd, we better do it in the chroot
-run arch-chroot /mnt <<EOS
-  groupadd -r autologin
-  groupadd -r printadmin
-  useradd -m -G wheel,autologin,lp,optical,printadmin,storage '$FIRSTUSER'
-  chpasswd <<<"$FIRSTUSER:$FIRSTUSERPWD" -
-EOS
-
-bak etc/fstab
-run genfstab -U /mnt '>>' etc/fstab
-run ed etc/fstab <<EOS
-,s/relatime/noatime/g
-wq
-EOS
-
-run ln -sf ../usr/share/zoneinfo/'$TIMEZONE' etc/localtime
-run hwclock --systohc
-run arch-chroot /mnt <<EOS
-systemctl enable systemd-timesyncd
-EOS
-
-bak etc/locale.gen
-run ed etc/locale.gen <<EOS
-,s/^#\($LOCALES\)/\1/
-wq
-EOS
-run arch-chroot /mnt <<EOS
-locale-gen
-EOS
-
-run echo LANG='$LANG' \>etc/locale.conf
-run echo KEYMAP='$KEYMAP' \>etc/vconsole.conf
-run echo '$HOSTNAME' \>etc/hostname
-
-RESUME_OFFSET=$(filefrag -v /mnt$SWAPFILE | awk 'NR == 4 { print $4+0 }')
-PARTUUID=$(blkid -s PARTUUID -o value "$INSTALLDISK$INSTALLPART")
-if [ -z "$EFIPART" ]; then
-  pacman-chroot -Sy intel-ucode grub os-prober
-
-  bak etc/default/grub
-  # If we were to use standard device names
-  # we would need to escape all / in $INSTALLDISK
-  # inside ed with: ${INSTALLDISK//\//\\/}
-  run ed etc/default/grub <<EOS
+function boot_conf {
+  RESUME_OFFSET=$(filefrag -v /mnt$SWAPFILE | awk 'NR == 4 { print $4+0 }')
+  PARTUUID=$(blkid -s PARTUUID -o value "$INSTALLDISK$INSTALLPART")
+  if [ -z "$EFIPART" ]; then
+    pacman-chroot -Sy intel-ucode grub os-prober
+  
+    bak etc/default/grub
+    # If we were to use standard device names
+    # we would need to escape all / in $INSTALLDISK
+    # inside ed with: ${INSTALLDISK//\//\\/}
+    run ed etc/default/grub <<EOS
 ,s/^\(GRUB_CMDLINE_LINUX_DEFAULT="quiet\)/\1 resume=PARTUUID=$PARTUUID resume_offset=$RESUME_OFFSET/
 ,s/^\(GRUB_TIMEOUT=\)5/\1$TIMEOUT/
 wq
 EOS
-fi
-
-run arch-chroot /mnt <<EOS
+  fi
+  
+  run arch-chroot /mnt <<EOS
 if [ "$EFIPART" ]; then
   bootctl --path=/boot install
 else
@@ -291,11 +219,11 @@ else
   grub-install --boot-directory=/boot --target=i386-pc '$INSTALLDISK'
 fi
 EOS
-
-if [ "$EFIPART" ]; then
-  # TODO: needed as of now? Or auto-generated? TO BE TESTED
-  bak boot/loader/loader.conf
-  run ed boot/loader/loader.conf <<EOS
+  
+  if [ "$EFIPART" ]; then
+    # TODO: needed as of now? Or auto-generated? TO BE TESTED
+    bak boot/loader/loader.conf
+    run ed boot/loader/loader.conf <<EOS
 ,s/^#\(timeout\) 3/\1 $TIMEOUT/
 ,s/^\(default\) .*/\1 arch/
 a
@@ -303,23 +231,73 @@ editor 0
 .
 wq
 EOS
-
-  if [ "$LTSKERNEL" = true ]; then
-    KERNELTYPE="-lts"
-  else
-    KERNELTYPE=""
-  fi
-  run cat \>boot/loader/entries/arch.conf <<EOS
+  
+    if [ "$LTSKERNEL" = true ]; then
+      KERNELTYPE="-lts"
+    else
+      KERNELTYPE=""
+    fi
+    run cat \>boot/loader/entries/arch.conf <<EOS
 title Farmboy Linux
 linux /vmlinuz-linux$KERNELTYPE
 initrd /initramfs-linux$KERNELTYPE.img
 options root=PARTUUID=$PARTUUID rw resume=PARTUUID=$PARTUUID resume_offset=$RESUME_OFFSET
 EOS
-fi
+  fi
+}
 
-bak etc/bash.bashrc
-run cat '>>' etc/bash.bashrc <<EOS
-
+function base_system {
+  msg 'Installing the base system (please wait)...'
+  run pacstrap /mnt base base-devel
+  
+  if [ "$LTSKERNEL" = true ]; then
+    pacman-chroot -Sy linux-lts
+    pacman-chroot -R linux
+  fi
+  
+  msg 'Configuring the base system...'
+  
+  bak etc/{passwd,shadow,group,gshadow}
+  
+  # -R /mnt causes segfault in groupadd, we better do it in the chroot
+  run arch-chroot /mnt <<EOS
+groupadd -r autologin
+groupadd -r printadmin
+useradd -m -G wheel,autologin,lp,optical,printadmin,storage '$FIRSTUSER'
+chpasswd <<<"$FIRSTUSER:$FIRSTUSERPWD" -
+EOS
+  
+  bak etc/fstab
+  run genfstab -U /mnt '>>' etc/fstab
+  run ed etc/fstab <<EOS
+,s/relatime/noatime/g
+wq
+EOS
+  
+  run ln -sf ../usr/share/zoneinfo/'$TIMEZONE' etc/localtime
+  run hwclock --systohc
+  run arch-chroot /mnt <<EOS
+systemctl enable systemd-timesyncd
+EOS
+  
+  bak etc/locale.gen
+  run ed etc/locale.gen <<EOS
+,s/^#\($LOCALES\)/\1/
+wq
+EOS
+  run arch-chroot /mnt <<EOS
+locale-gen
+EOS
+  
+  run echo LANG='$LANG' \>etc/locale.conf
+  run echo KEYMAP='$KEYMAP' \>etc/vconsole.conf
+  run echo '$HOSTNAME' \>etc/hostname
+  
+  boot_conf
+  
+  bak etc/bash.bashrc
+  run cat '>>' etc/bash.bashrc <<EOS
+ 
 # Protect against accidentally overwriting/deleting a file.
 alias cp='cp -i'
 alias mv='mv -i'
@@ -327,37 +305,37 @@ alias rm='rm -i'
 
 alias vi=vim
 EOS
-
-bak etc/mkinitcpio.conf
-run ed etc/mkinitcpio.conf <<EOS
+  
+  bak etc/mkinitcpio.conf
+  run ed etc/mkinitcpio.conf <<EOS
 ,s/^\(HOOKS="base udev \)/\1resume /
 wq
 EOS
-run arch-chroot /mnt <<EOS
+  run arch-chroot /mnt <<EOS
 if [ "$LTSKERNEL" = true ]; then
   mkinitcpio -p linux-lts
 else
   mkinitcpio -p linux
 fi
 EOS
-
-# Disable root login
-run passwd -R /mnt -l root \>/dev/null
-
-bak etc/sudoers
-run ed etc/sudoers <<EOS
+  
+  # Disable root login
+  run passwd -R /mnt -l root \>/dev/null
+  
+  bak etc/sudoers
+  run ed etc/sudoers <<EOS
 ,s/^# \(%wheel ALL=(ALL) ALL\)/\1/
 wq
 EOS
-
-# Do not install pulseaudio: most users do not need to play two audio streams
-# at once.  Changing default soundcard will be done with asoundconf-gtk.
-# No need for pasystray, except for re-routing audio without restarting an
-# application, but this most users can do without.
-# Very few ones need network audio as well.
-#pacman-chroot -S pulseaudio pulseaudio-alsa
-
-run cat \>usr/share/libalpm/hooks/confmerge.hook <<EOS
+  
+  # Do not install pulseaudio: most users do not need to play two audio streams
+  # at once.  Changing default soundcard will be done with asoundconf-gtk.
+  # No need for pasystray, except for re-routing audio without restarting an
+  # application, but this most users can do without.
+  # Very few ones need network audio as well.
+  #pacman-chroot -S pulseaudio pulseaudio-alsa
+  
+  run cat \>usr/share/libalpm/hooks/confmerge.hook <<EOS
 [Trigger]
 Operation = Upgrade
 Type = File
@@ -374,9 +352,9 @@ When = PostTransaction
 Exec = /usr/local/sbin/confmerge
 NeedsTargets
 EOS
-
-# This avoids filling up the disk with old packages in the long run.
-run cat \>usr/share/libalpm/hooks/paccache.hook <<EOS
+  
+  # This avoids filling up the disk with old packages in the long run.
+  run cat \>usr/share/libalpm/hooks/paccache.hook <<EOS
 [Trigger]
 Operation = Remove
 Operation = Install
@@ -389,8 +367,8 @@ Description = Keep the last cache and the currently installed.
 When = PostTransaction
 Exec = /usr/bin/paccache -rvk2
 EOS
-
-run cat \>usr/local/sbin/confmerge <<'EOS'
+  
+  run cat \>usr/local/sbin/confmerge <<'EOS'
 #!/bin/sh
 # Try to automatically update configuration after an upgrade.
 
@@ -463,53 +441,55 @@ while IFS= read -r file; do
   fi
 done
 EOS
-run chmod +x usr/local/sbin/confmerge
-
-# Ignore the power key, so that it is caught by the WM
-# and no accidental shutdown can happen
-bak etc/systemd/logind.conf
-run ed etc/systemd/logind.conf <<EOS
+  run chmod +x usr/local/sbin/confmerge
+  
+  # Ignore the power key, so that it is caught by the WM
+  # and no accidental shutdown can happen
+  bak etc/systemd/logind.conf
+  run ed etc/systemd/logind.conf <<EOS
 ,s/^#\(HandlePowerKey\)=poweroff/\1=ignore/
 wq
 EOS
+}
 
-msg 'Installing optionals (please wait)...'
-pacman-cleanup
-
-# this rep provides yaourt but also openbox-menu
-bak etc/pacman.conf
-run cat '>>' etc/pacman.conf <<EOS
+function optionals {
+  msg 'Installing optionals (please wait)...'
+  pacman-cleanup
+  
+  # this rep provides yaourt but also openbox-menu
+  bak etc/pacman.conf
+  run cat '>>' etc/pacman.conf <<EOS
 [archlinuxfr]
 SigLevel = Never
 Server = http://repo.archlinux.fr/\$arch
 EOS
-pacman-chroot -Sy crda openssh ed bash-completion zip unzip \
-  git asp yaourt vim alsa-utils unrar timidity++ soundfont-fluid \
-  qrencode tlp tlp-rdw ethtool cups foomatic-db foomatic-db-engine \
-  foomatic-db-nonfree cups-filters foomatic-db-nonfree-ppds hplip \
-  python-pyqt5 splix rsync dmidecode
-
-bak etc/ssh/sshd_config
-run cat '>>' etc/ssh/sshd_config <<'EOS'
+  pacman-chroot -Sy crda openssh ed bash-completion zip unzip \
+    git asp yaourt vim alsa-utils unrar timidity++ soundfont-fluid \
+    qrencode tlp tlp-rdw ethtool cups foomatic-db foomatic-db-engine \
+    foomatic-db-nonfree cups-filters foomatic-db-nonfree-ppds hplip \
+    python-pyqt5 splix rsync dmidecode
+  
+  bak etc/ssh/sshd_config
+  run cat '>>' etc/ssh/sshd_config <<'EOS'
 
 # Allow client to pass locale environment variables
 AcceptEnv LANG LC_*
 EOS
-
-run arch-chroot /mnt <<EOS
+  
+  run arch-chroot /mnt <<EOS
 systemctl enable tlp tlp-sleep NetworkManager-dispatcher \
   org.cups.cupsd
 systemctl mask systemd-rfkill systemd-rfkill.socket
 EOS
-
-if [ "$LAMP" = true ]; then
-  pacman-chroot -S apache php php-apache mariadb
-  run chmod o+x 'home/$FIRSTUSER'
-  run mkdir 'home/$FIRSTUSER/public_html'
-  run chown '$FIRSTUSER:$FIRSTUSER' 'home/$FIRSTUSER/public_html'
-  run chmod o+rx 'home/$FIRSTUSER/public_html'
-  bak etc/httpd/conf/httpd.conf
-  run ed etc/httpd/conf/httpd.conf <<EOS
+  
+  if [ "$LAMP" = true ]; then
+    pacman-chroot -S apache php php-apache mariadb
+    run chmod o+x 'home/$FIRSTUSER'
+    run mkdir 'home/$FIRSTUSER/public_html'
+    run chown '$FIRSTUSER:$FIRSTUSER' 'home/$FIRSTUSER/public_html'
+    run chmod o+rx 'home/$FIRSTUSER/public_html'
+    bak etc/httpd/conf/httpd.conf
+    run ed etc/httpd/conf/httpd.conf <<EOS
 ,s/^\(LoadModule mpm_event_module modules\/mod_mpm_event\.so\)/#\1/
 ,s/^#\(LoadModule mpm_prefork_module modules\/mod_mpm_prefork\.so\)/\1/
 /^#LoadModule rewrite_module/
@@ -525,88 +505,88 @@ Include conf/extra/php7_module.conf
 .
 wq
 EOS
-
-  bak etc/php/php.ini
-  run ed etc/php/php.ini <<EOS
+  
+    bak etc/php/php.ini
+    run ed etc/php/php.ini <<EOS
 ,s/^;\(extension=mysqli\.so\)/\1/
 ,s/^;\(extension=pdo_mysql\.so\)/\1/
 wq
 EOS
-
-  run arch-chroot /mnt <<EOS
+  
+    run arch-chroot /mnt <<EOS
 mysql_install_db --user=mysql --basedir=/usr --datadir=/var/lib/mysql
 EOS
-
-  run arch-chroot /mnt <<EOS
+  
+    run arch-chroot /mnt <<EOS
   systemctl enable httpd mariadb
 EOS
-
-  msg 'After first boot, consider running: # mysql_secure_installation'
-fi
-
-if [ "$VIRTUALBOX_HOST" = true ]; then
-  if [ "$LTSKERNEL" = true ]; then
-    pacman-chroot -S virtualbox virtualbox-host-dkms linux-lts-headers
-  else
-    pacman-chroot -S virtualbox virtualbox-host-modules-arch
+  
+    msg 'After first boot, consider running: # mysql_secure_installation'
   fi
-  run gpasswd -Q /mnt -a '$FIRSTUSER' vboxusers
-fi
-
-if [ "$VIRTUALBOX_GUEST" = true ]; then
-  if [ "$LTSKERNEL" = true ]; then
-    pacman-chroot -S virtualbox-guest-dkms linux-lts-headers virtualbox-guest-utils
-  else
-    pacman-chroot -S virtualbox-guest-modules-arch virtualbox-guest-utils
+  
+  if [ "$VIRTUALBOX_HOST" = true ]; then
+    if [ "$LTSKERNEL" = true ]; then
+      pacman-chroot -S virtualbox virtualbox-host-dkms linux-lts-headers
+    else
+      pacman-chroot -S virtualbox virtualbox-host-modules-arch
+    fi
+    run gpasswd -Q /mnt -a '$FIRSTUSER' vboxusers
   fi
-  run arch-chroot /mnt <<EOS
+  
+  if [ "$VIRTUALBOX_GUEST" = true ]; then
+    if [ "$LTSKERNEL" = true ]; then
+      pacman-chroot -S virtualbox-guest-dkms linux-lts-headers virtualbox-guest-utils
+    else
+      pacman-chroot -S virtualbox-guest-modules-arch virtualbox-guest-utils
+    fi
+    run arch-chroot /mnt <<EOS
 systemctl enable vboxservice
 EOS
-  # This is for shared folder to work out of the box in pacmanf
-  # Just select "Make permanent" and "Auto-mount" when creating
-  # the shared folder in the Virtulbox GUI and you are ready to go.
-  chgrp vboxsf /media
-  run gpasswd -Q /mnt -a '$FIRSTUSER' vboxsf
-fi
-
-pacman-chroot -S tlp-rdw
-bak etc/default/tlp
-run ed etc/default/tlp <<EOS
+    # This is for shared folder to work out of the box in pacmanf
+    # Just select "Make permanent" and "Auto-mount" when creating
+    # the shared folder in the Virtulbox GUI and you are ready to go.
+    chgrp vboxsf /media
+    run gpasswd -Q /mnt -a '$FIRSTUSER' vboxsf
+  fi
+  
+  pacman-chroot -S tlp-rdw
+  bak etc/default/tlp
+  run ed etc/default/tlp <<EOS
 ,s/^#\(DEVICES_TO_DISABLE_ON_LAN_CONNECT\)/\1/
 ,s/^#\(DEVICES_TO_DISABLE_ON_WIFI_CONNECT\)/\1/
 ,s/^#\(DEVICES_TO_DISABLE_ON_WWAN_CONNECT\)/\1/
 wq
 EOS
-
-# Note "lp" is for users allowed to print
-# and "printadmin" is for printer administration. 
-# The default root account cannot be used for the
-# latter task, because it is disabled.
-bak etc/cups/cups-files.conf
-run ed etc/cups/cups-files.conf <<EOS
+  
+  # Note "lp" is for users allowed to print
+  # and "printadmin" is for printer administration. 
+  # The default root account cannot be used for the
+  # latter task, because it is disabled.
+  bak etc/cups/cups-files.conf
+  run ed etc/cups/cups-files.conf <<EOS
 ,s/^\(SystemGroup\) sys root/\1 printadmin/
 wq
 EOS
-
-# Change the default letter papersize
-bak etc/papersize
-run echo a4 '>>' etc/papersize
-
-# The system print dialog already has a "Print to file"
-# option. I do not see a reason to set up a CUPS virtual printer
-#pacman-chroot -S cups-pdf
-#run mkdir -m700 'var/spool/cups-pdf/$FIRSTUSER'
-#run chown '$FIRSTUSER:$FIRSTUSER' 'var/spool/cups-pdf/$FIRSTUSER'
-## Prefer absolute target paths, they still work if the link is moved.
-#run ln -sf '/var/spool/cups-pdf/$FIRSTUSER' 'home/$FIRSTUSER/Documents/Virtual_PDF_Printer'
-#run cp usr/share/cups/model/CUPS-PDF_opt.ppd etc/cups/ppd/Virtual_PDF_Printer.ppd
-#run cp usr/share/cups/model/CUPS-PDF_opt.ppd etc/cups/ppd/Virtual_PDF_Printer.ppd.O
-#run ed etc/cups/ppd/Virtual_PDF_Printer.ppd <<EOS
+  
+  # Change the default letter papersize
+  bak etc/papersize
+  run echo a4 '>>' etc/papersize
+  
+  # The system print dialog already has a "Print to file"
+  # option. I do not see a reason to set up a CUPS virtual printer
+  #pacman-chroot -S cups-pdf
+  #run mkdir -m700 'var/spool/cups-pdf/$FIRSTUSER'
+  #run chown '$FIRSTUSER:$FIRSTUSER' 'var/spool/cups-pdf/$FIRSTUSER'
+  ## Prefer absolute target paths, they still work if the link is moved.
+  #run ln -sf '/var/spool/cups-pdf/$FIRSTUSER' 'home/$FIRSTUSER/Documents/Virtual_PDF_Printer'
+  #run cp usr/share/cups/model/CUPS-PDF_opt.ppd etc/cups/ppd/Virtual_PDF_Printer.ppd
+  #run cp usr/share/cups/model/CUPS-PDF_opt.ppd etc/cups/ppd/Virtual_PDF_Printer.ppd.O
+  #run ed etc/cups/ppd/Virtual_PDF_Printer.ppd <<EOS
 #,s/^\(*DefaultLabel:\) 2/\1 0/
 #wq
 #EOS
-#run mv etc/cups/printers.conf etc/cups/printers.conf.O
-#run cat '>>' etc/cups/printers.conf <<EOS
+  #run mv etc/cups/printers.conf etc/cups/printers.conf.O
+  #run cat '>>' etc/cups/printers.conf <<EOS
 #<Printer Virtual_PDF_Printer>
 #UUID urn:uuid:3eed9640-cd56-3669-7b20-e258265dc3a0
 #Info Virtual PDF Printer
@@ -627,115 +607,118 @@ run echo a4 '>>' etc/papersize
 #ErrorPolicy stop-printer
 #</Printer>
 #EOS
+}
 
-msg 'Installing the GUI (please wait)...'
-pacman-cleanup
-# Note: needed packages should be listed explicitely even if they are
-# dependencies of other packages, so that they won't be removed by a
-# recursive removal of the the latter
-pacman-chroot -Sy xorg-server xorg-drivers lightdm lightdm-gtk-greeter \
-  ttf-dejavu ttf-ubuntu-font-family artwiz-fonts openbox pcmanfm-gtk3 \
-  lilyterm '$BROWSER' asunder filezilla galculator gimp gmrun gnome-keyring \
-  gnome-mplayer gnumeric guvcview networkmanager network-manager-applet tint2 \
-  usb_modeswitch modemmanager obconf openbox-menu gnome-icon-theme \
-  transmission-gtk xsane viewnior xarchiver xdotool xfce4-notifyd \
-  xpdf gvfs xorg-xhost xorg-xprop imagemagick gnome-alsamixer \
-  volumeicon lxappearance-obconf lxinput xfce4-notes-plugin xorg-xrandr \
-  accountsservice gksu libreoffice-still calibre lxsession-gtk3 \
-  gnome-system-monitor gv gtk3-print-backends oblogout orage xfburn udiskie \
-  light-locker mousepad x2goserver gtkdialog
-
-# TODO: does not work with language variants.
-LANGCODE=${LANG%%_*}
-if [ "$LANGCODE" != en ]; then
-  pacman-chroot -S libreoffice-still-$LANGCODE
-fi
-
-if [ "$BROWSER" = firefox ]; then
-  pacman-chroot -S firefox-i18n-$LANGCODE thunderbird thunderbird-i18n-$LANGCODE \
-    flashplugin
-  EMAILCLIENT=thunderbird
-elif [ "$BROWSER" = chromium ]; then
-  pacman-chroot --noconfirm -S sylpheed pepper-flash
-  EMAILCLIENT=sylpheed
-else
-  EMAILCLIENT=opera
-  pacman-chroot --noconfirm -S pepper-flash
-fi
-
-if [ "$THEMES" = true ]; then
-  pacman-chroot -S openbox-themes numix-gtk-theme adapta-gtk-theme \
-    gtk-engine-murrine noto-fonts ttf-roboto arc-gtk-theme arc-icon-theme \
-    gnome-themes-standard arc-solid-gtk-theme deepin-gtk-theme \
-    gtk-theme-overglossed-hybrid gtk-theme-slickness
-fi
-
-pacman-chroot -S aspell-$LANGCODE 2\>/dev/null
-pacman-cleanup
-
-msg 'Configuring the GUI...'
-
-# Set gksu to use sudo by default
-# since the root account is disabled
-run arch-chroot /mnt <<EOS
+function gui {
+  msg 'Installing the GUI (please wait)...'
+  pacman-cleanup
+  # Note: needed packages should be listed explicitely even if they are
+  # dependencies of other packages, so that they won't be removed by a
+  # recursive removal of the the latter
+  pacman-chroot -Sy xorg-server xorg-drivers lightdm lightdm-gtk-greeter \
+    ttf-dejavu ttf-ubuntu-font-family artwiz-fonts openbox pcmanfm-gtk3 \
+    lilyterm '$BROWSER' asunder filezilla galculator gimp gmrun gnome-keyring \
+    gnome-mplayer gnumeric guvcview networkmanager network-manager-applet tint2 \
+    usb_modeswitch modemmanager obconf openbox-menu gnome-icon-theme \
+    transmission-gtk xsane viewnior xarchiver xdotool xfce4-notifyd \
+    xpdf gvfs xorg-xhost xorg-xprop imagemagick gnome-alsamixer \
+    volumeicon lxappearance-obconf lxinput xfce4-notes-plugin xorg-xrandr \
+    accountsservice gksu libreoffice-still calibre lxsession-gtk3 \
+    gnome-system-monitor gv gtk3-print-backends oblogout orage xfburn udiskie \
+    light-locker mousepad x2goserver gtkdialog hunspell-en hyphen-en \
+    libmythes mythes-en
+  
+  # TODO: does not work with language variants.
+  if [ "$LANGCODE" != en ]; then
+    pacman-chroot -S libreoffice-still-$LANGCODE hunspell-$LANGCODE \
+      hyphen-$LANGCODE mythes-$LANGCODE
+  fi
+  
+  if [ "$BROWSER" = firefox ]; then
+    pacman-chroot -S firefox-i18n-$LANGCODE thunderbird thunderbird-i18n-$LANGCODE \
+      flashplugin
+    EMAILCLIENT=thunderbird
+  elif [ "$BROWSER" = chromium ]; then
+    pacman-chroot --noconfirm -S sylpheed pepper-flash
+    EMAILCLIENT=sylpheed
+  else
+    EMAILCLIENT=opera
+    pacman-chroot --noconfirm -S pepper-flash
+  fi
+  
+  if [ "$THEMES" = true ]; then
+    pacman-chroot -S openbox-themes numix-gtk-theme adapta-gtk-theme \
+      gtk-engine-murrine noto-fonts ttf-roboto arc-gtk-theme arc-icon-theme \
+      gnome-themes-standard arc-solid-gtk-theme deepin-gtk-theme \
+      gtk-theme-overglossed-hybrid gtk-theme-slickness
+  fi
+  
+  pacman-chroot -S aspell-$LANGCODE 2\>/dev/null
+  pacman-cleanup
+  
+  msg 'Configuring the GUI...'
+  
+  # Set gksu to use sudo by default
+  # since the root account is disabled
+  run arch-chroot /mnt <<EOS
 su - '$FIRSTUSER' -c 'mkdir -p /home/$FIRSTUSER/.config/gconf;
 gconftool-2 --set --type boolean /apps/gksu/sudo-mode true'
 EOS
-
-bak etc/conf.d/wireless-regdom
-run ed etc/conf.d/wireless-regdom <<EOS
+  
+  bak etc/conf.d/wireless-regdom
+  run ed etc/conf.d/wireless-regdom <<EOS
 ,s/^#\(WIRELESS_REGDOM="IT"\)/\1/
 wq
 EOS
-
-bak etc/lightdm/lightdm.conf
-run ed etc/lightdm/lightdm.conf <<EOS
+  
+  bak etc/lightdm/lightdm.conf
+  run ed etc/lightdm/lightdm.conf <<EOS
 ,s/^#\(pam-service=lightdm\)/\1/
 ,s/^#\(pam-autologin-service=lightdm-autologin\)/\1/
 ,s/^#\(autologin-user=\)/\1$FIRSTUSER/
 ,s/^#\(autologin-user-timeout=0\)/\1/
 wq
 EOS
-bak etc/pam.d/lightdm
-run ed etc/pam.d/lightdm <<EOS
+  bak etc/pam.d/lightdm
+  run ed etc/pam.d/lightdm <<EOS
 2i
 auth        sufficient  pam_succeed_if.so user ingroup nopasswdlogin
 .
 wq
 EOS
-run arch-chroot /mnt <<EOS
+  run arch-chroot /mnt <<EOS
 groupadd -r nopasswdlogin
 # Skipped, because we want the screen locker to ask for a password,
 # so we only configured no-password logins but did not enable it
 #gpasswd -a '$FIRSTUSER' nopasswdlogin
 systemctl enable lightdm NetworkManager ModemManager
 EOS
-
-bak etc/lightdm/lightdm-gtk-greeter.conf
-run ed etc/lightdm/lightdm-gtk-greeter.conf <<EOS
+  
+  bak etc/lightdm/lightdm-gtk-greeter.conf
+  run ed etc/lightdm/lightdm-gtk-greeter.conf <<EOS
 ,s/^#\(background=\)/\1\/usr\/share\/pixmaps\/farmboy_linux.jpg/
 ,s/^#\(position=\)/\150% 60%/
 wq
 EOS
-cd -
-run cp farmboy_linux.jpg /mnt/usr/share/pixmaps/
-cd -
-
-run cat \>etc/X11/xorg.conf.d/00-keyboard.conf <<EOS
+  cd -
+  run cp farmboy_linux.jpg /mnt/usr/share/pixmaps/
+  cd -
+  
+  run cat \>etc/X11/xorg.conf.d/00-keyboard.conf <<EOS
 Section "InputClass"
         Identifier "system-keyboard"
         MatchIsKeyboard "on"
         Option "XkbLayout" "$KEYMAP"
 EndSection
 EOS
-
-run cat \>etc/udev/rules.d/100-dvd.rules <<EOS
+  
+  run cat \>etc/udev/rules.d/100-dvd.rules <<EOS
 # gnome-mplayer and others need a /dev/dvd link
 KERNEL=="sr0", SYMLINK+="dvd"
 EOS
-
-bak etc/lilyterm.conf
-run ed etc/lilyterm.conf <<EOS
+  
+  bak etc/lilyterm.conf
+  run ed etc/lilyterm.conf <<EOS
 ,s/^\(font_name = Monospace\) 12/\1 18/
 ,s/^\(web_browser =\) firefox/\1 $BROWSER/
 ,s/^\(file_manager =\) firefox/\1 pcmanfm/
@@ -743,19 +726,19 @@ run ed etc/lilyterm.conf <<EOS
 ,s/^\(email_client =\) thunderbird/\1 $EMAILCLIENT/
 wq
 EOS
-
-bak etc/timidity++/timidity.cfg
-# Highest-quality soundfonts must come last.
-run ed etc/timidity++/timidity.cfg << EOS
+  
+  bak etc/timidity++/timidity.cfg
+  # Highest-quality soundfonts must come last.
+  run ed etc/timidity++/timidity.cfg << EOS
 ,s/^# \(soundfont \/usr\/share\/soundfonts\/\)DX7Piano.SF2/\1FluidR3_GM.sf2/
 a
 soundfont /usr/share/soundfonts/SGM-V2.01.sf2
 .
 wq
 EOS
-
-run mkdir etc/skel/.config
-run cat \>etc/skel/.config/mimeapps.list <<EOS
+  
+  run mkdir etc/skel/.config
+  run cat \>etc/skel/.config/mimeapps.list <<EOS
 [Default Applications]
 application/pdf=xpdf.desktop
 application/postscript=gv.desktop
@@ -774,9 +757,9 @@ video/x-msvideo=gnome-mplayer.desktop
 x-scheme-handler/http=$BROWSER.desktop
 x-scheme-handler/https=$BROWSER.desktop
 EOS
-
-run mkdir etc/skel/.config/volumeicon
-run cat \>etc/skel/.config/volumeicon/volumeicon <<EOS
+  
+  run mkdir etc/skel/.config/volumeicon
+  run cat \>etc/skel/.config/volumeicon/volumeicon <<EOS
 [Alsa]
 card=default
 
@@ -800,20 +783,20 @@ up_enabled=false
 down_enabled=false
 mute_enabled=false
 EOS
-
-run mkdir etc/skel/.config/orage
-run cat \>etc/skel/.config/orage/oragerc <<EOS
+  
+  run mkdir etc/skel/.config/orage
+  run cat \>etc/skel/.config/orage/oragerc <<EOS
 [PARAMETERS]
 Start visible=false
 EOS
 
-run mkdir etc/skel/.config/gtk-3.0
-run cat \>etc/skel/.config/gtk-3.0/bookmarks <<EOS
+  run mkdir etc/skel/.config/gtk-3.0
+  run cat \>etc/skel/.config/gtk-3.0/bookmarks <<EOS
 file:///tmp tmp
 file:///home/me/.config/autostart autostart
 EOS
-
-run cat\>etc/X11/xorg.conf.d/70-synaptics.conf <<EOS
+  
+  run cat\>etc/X11/xorg.conf.d/70-synaptics.conf <<EOS
 Section "InputClass"
     Identifier "touchpad"
     Driver "synaptics"
@@ -835,47 +818,47 @@ Section "InputClass"
         Option "MaxTapTime" "125"
 EndSection
 EOS
-
-# Please note some application packages (e.g. pamac-tray)
-# already put a global autostart desktop file in /etc/xdg/autostart/
-# and in this case you should not try to start them twice,
-# unless the desktop file contains Hidden=true (as it is the case
-# with /etc/xdg/autostart/xfce4-notes-autostart.desktop)
-# In the latter case it should be copied and patched with Hidden=false.
-
-# Applications intended not to be disabled
-# should be autostarted here.
-bak etc/xdg/openbox/autostart
-run cat \>etc/xdg/openbox/autostart <<EOS
+  
+  # Please note some application packages (e.g. pamac-tray)
+  # already put a global autostart desktop file in /etc/xdg/autostart/
+  # and in this case you should not try to start them twice,
+  # unless the desktop file contains Hidden=true (as it is the case
+  # with /etc/xdg/autostart/xfce4-notes-autostart.desktop)
+  # In the latter case it should be copied and patched with Hidden=false.
+  
+  # Applications intended not to be disabled
+  # should be autostarted here.
+  bak etc/xdg/openbox/autostart
+  run cat \>etc/xdg/openbox/autostart <<EOS
 /usr/bin/pcmanfm -d --desktop &
 /usr/bin/volumeicon &
 /usr/bin/udiskie --tray &
 /usr/bin/tint2 &
 /usr/bin/lxsession &
 EOS
-
-# Applications intended to be optional
-# should be autostarted here using desktop files.
-run mkdir etc/skel/.config/autostart
-run ln -sf /usr/share/applications/xfcalendar.desktop \
-  /usr/share/applications/$BROWSER.desktop \
-  etc/skel/.config/autostart/
-run cp etc/xdg/autostart/xfce4-notes-autostart.desktop etc/skel/.config/autostart/
-run ed etc/skel/.config/autostart/xfce4-notes-autostart.desktop <<EOS
+  
+  # Applications intended to be optional
+  # should be autostarted here using desktop files.
+  run mkdir etc/skel/.config/autostart
+  run ln -sf /usr/share/applications/xfcalendar.desktop \
+    /usr/share/applications/$BROWSER.desktop \
+    etc/skel/.config/autostart/
+  run cp etc/xdg/autostart/xfce4-notes-autostart.desktop etc/skel/.config/autostart/
+  run ed etc/skel/.config/autostart/xfce4-notes-autostart.desktop <<EOS
 ,s/^\(Hidden\)=true/\1=false/
 wq
 EOS
-
-# Disable automount in pcmanfm since it is done by udiskie
-bak etc/xdg/pcmanfm/default/pcmanfm.conf
-run ed etc/xdg/pcmanfm/default/pcmanfm.conf <<EOS
+  
+  # Disable automount in pcmanfm since it is done by udiskie
+  bak etc/xdg/pcmanfm/default/pcmanfm.conf
+  run ed etc/xdg/pcmanfm/default/pcmanfm.conf <<EOS
 ,s/^\(mount_on_startup\)=1/\1=0/
 ,s/^\(mount_removable\)=1/\1=0/
 wq
 EOS
-
-bak etc/xdg/openbox/rc.xml
-run ed etc/xdg/openbox/rc.xml <<EOS
+  
+  bak etc/xdg/openbox/rc.xml
+  run ed etc/xdg/openbox/rc.xml <<EOS
 ,s/<followMouse>no</<followMouse>yes</
 ,s/<titleLayout>NLIMC</<titleLayout>NLSDIMC</
 /<font place="MenuItem">
@@ -948,8 +931,8 @@ s/9/18/
 .
 wq
 EOS
-
-run cat \>usr/local/bin/winscreenshot <<'EOS'
+  
+  run cat \>usr/local/bin/winscreenshot <<'EOS'
 #!/bin/sh
 # Requires: xorg-xprop for xprop, imagemagick for import
 # See: https://wiki.archlinux.org/index.php/Taking_a_Screenshot#Screenshot_of_the_active.2Ffocused_window
@@ -962,9 +945,9 @@ import -border -window $activeWinId ~/Desktop/ss_$(date +%F_%H%M%S_%N).png
 #((numfiles++))
 #import -frame -window "$activeWinId" $numfiles.png
 EOS
-run chmod +x usr/local/bin/winscreenshot
-
-run cat \>usr/local/bin/blankscreen <<'EOS'
+  run chmod +x usr/local/bin/winscreenshot
+  
+  run cat \>usr/local/bin/blankscreen <<'EOS'
 #!/bin/bash
 # http://superuser.com/questions/374637/linux-how-to-turn-off-screen-with-shortcut
 
@@ -972,18 +955,18 @@ run cat \>usr/local/bin/blankscreen <<'EOS'
 # (I guess) sometimes turns the screen back on immediately
 sleep 1; xset dpms force off
 EOS
-run chmod +x usr/local/bin/blankscreen
-
-run cat \>usr/local/bin/userpwd <<'EOS'
+  run chmod +x usr/local/bin/blankscreen
+  
+  run cat \>usr/local/bin/userpwd <<'EOS'
 #!/bin/sh
 # Asks for a user password with using GUI
 # Intended to be used with the -A sudo option
 
 /usr/bin/gksudo -pm "Enter your password to perform administrative tasks"
 EOS
-run chmod +x usr/local/bin/userpwd
-
-run cat \>usr/local/bin/machineuid <<'EOS'
+  run chmod +x usr/local/bin/userpwd
+  
+  run cat \>usr/local/bin/machineuid <<'EOS'
 #!/bin/sh
 # Tries to compute a unique machine id.
 # (c) 2017 Antonio Bonifati "Farmboy" - Released under GPL 3.0
@@ -1025,9 +1008,9 @@ fi
 
 echo $SERIAL
 EOS
-run chmod +x usr/local/bin/machineuid
-
-run cat \>usr/local/bin/supportservice <<'EOF'
+  run chmod +x usr/local/bin/machineuid
+  
+  run cat \>usr/local/bin/supportservice <<'EOF'
 #!/bin/sh
 # P2P Desktop-sharing support solution for Farmboy Linux.
 # Requires gtkdialog.
@@ -1145,9 +1128,9 @@ EOS
 
 ) 200>"$LOCKFILE"
 EOF
-run chmod +x usr/local/bin/supportservice
-
-run cat \>usr/local/bin/supportrequest <<'EOF'
+  run chmod +x usr/local/bin/supportservice
+  
+  run cat \>usr/local/bin/supportrequest <<'EOF'
 #!/bin/sh
 # Send a support request for Farmboy Linux.
 # Requires gtkdialog.
@@ -1279,9 +1262,9 @@ fi
 
 xdg-open "$URL"
 EOF
-run chmod +x usr/local/bin/supportrequest
-
-run cat \>usr/share/applications/showdesktop.desktop <<'EOS'
+  run chmod +x usr/local/bin/supportrequest
+  
+  run cat \>usr/share/applications/showdesktop.desktop <<'EOS'
 [Desktop Entry]
 Name=Show Desktop
 GenericName=Minimizer
@@ -1292,8 +1275,8 @@ Type=Application
 StartupNotify=false
 NoDisplay=true
 EOS
-
-run cat \>usr/share/applications/obreload.desktop <<'EOS'
+  
+  run cat \>usr/share/applications/obreload.desktop <<'EOS'
 [Desktop Entry]
 Name=Window Manager Reload
 GenericName=Window Manager Reconfiguration
@@ -1304,40 +1287,40 @@ Type=Application
 Categories=Settings;DesktopSettings
 StartupNotify=false
 EOS
-
-bak etc/xdg/openbox/menu.xml
-# TODO: I must provide GUI to change system language and this menu too.
-case $LANG in
-it*)
-  OM_APPS="Applicazioni"
-  OM_RUN="Esegui Comando"
-  OM_SUPPORT="Supporto Online  "
-  OM_KNOW="FAQ e Knowledge Base"
-  OM_REQ="Richiesta di Supporto"
-  OM_X2GO="Attiva Servizio di Supporto"
-  OM_SUSPEND="Sospendi"
-  OM_HIBERNATE="Iberna"
-  OM_LOCK="Blocca Schermo"
-  OM_LOGOUT="Esci"
-  OM_RESTART="Riavvia"
-  OM_POWEROFF="Spegni"
-  ;;
-*)
-  OM_APPS="Applications"
-  OM_RUN="Run Program"
-  OM_SUPPORT="Online Support   "
-  OM_KNOW="FAQ and Knowledge Base"
-  OM_REQ="Support Request"
-  OM_X2GO="Activate Support Service"
-  OM_SUSPEND="Suspend"
-  OM_HIBERNATE="Hibernate"
-  OM_LOCK="Lock Screen"
-  OM_LOGOUT="Log Out"
-  OM_RESTART="Restart"
-  OM_POWEROFF="Power Off"
-  ;;
-esac
-run cat \>etc/xdg/openbox/menu.xml <<EOS
+  
+  bak etc/xdg/openbox/menu.xml
+  # TODO: I must provide GUI to change system language and this menu too.
+  case $LANG in
+  it*)
+    OM_APPS="Applicazioni"
+    OM_RUN="Esegui Comando"
+    OM_SUPPORT="Supporto Online  "
+    OM_KNOW="FAQ e Knowledge Base"
+    OM_REQ="Richiesta di Supporto"
+    OM_X2GO="Attiva Servizio di Supporto"
+    OM_SUSPEND="Sospendi"
+    OM_HIBERNATE="Iberna"
+    OM_LOCK="Blocca Schermo"
+    OM_LOGOUT="Esci"
+    OM_RESTART="Riavvia"
+    OM_POWEROFF="Spegni"
+    ;;
+  *)
+    OM_APPS="Applications"
+    OM_RUN="Run Program"
+    OM_SUPPORT="Online Support   "
+    OM_KNOW="FAQ and Knowledge Base"
+    OM_REQ="Support Request"
+    OM_X2GO="Activate Support Service"
+    OM_SUSPEND="Suspend"
+    OM_HIBERNATE="Hibernate"
+    OM_LOCK="Lock Screen"
+    OM_LOGOUT="Log Out"
+    OM_RESTART="Restart"
+    OM_POWEROFF="Power Off"
+    ;;
+  esac
+  run cat \>etc/xdg/openbox/menu.xml <<EOS
 <?xml version="1.0" encoding="UTF-8"?>
 
 <openbox_menu xmlns="http://openbox.org/3.4/menu">
@@ -1409,8 +1392,8 @@ run cat \>etc/xdg/openbox/menu.xml <<EOS
 
 </openbox_menu>
 EOS
-
-run cat \>usr/share/applications/startmenu.desktop <<'EOS'
+  
+  run cat \>usr/share/applications/startmenu.desktop <<'EOS'
 [Desktop Entry]
 Name=Open AppMenu
 GenericName=Start menu
@@ -1421,9 +1404,9 @@ Type=Application
 StartupNotify=false
 NoDisplay=true
 EOS
-
-bak etc/xdg/tint2/tint2rc
-run ed etc/xdg/tint2/tint2rc <<'EOS'
+  
+  bak etc/xdg/tint2/tint2rc
+  run ed etc/xdg/tint2/tint2rc <<'EOS'
 ,s/\(border_width =\) 0/\1 1/
 ,s/\(panel_items = LTS\)C/\1BC/
 ,s/\(autohide_show_timeout =\) 0/\1 0.3/
@@ -1456,31 +1439,31 @@ time1_font = monospace 18
 ,s/\(battery_hide =\) 101/\1 98/
 wq
 EOS
-
-# Use clearer generic names for desktop configuration tools.
-bak usr/share/applications/tint2conf.desktop
-run ed usr/share/applications/tint2conf.desktop <<'EOS'
+  
+  # Use clearer generic names for desktop configuration tools.
+  bak usr/share/applications/tint2conf.desktop
+  run ed usr/share/applications/tint2conf.desktop <<'EOS'
 ,s/\(Name\)=Tint2 Settings/\1=Taskbar Manager/
 wq
 EOS
-bak usr/share/applications/obconf.desktop
-run ed usr/share/applications/obconf.desktop <<'EOS'
+  bak usr/share/applications/obconf.desktop
+  run ed usr/share/applications/obconf.desktop <<'EOS'
 ,s/\(Name\)=Openbox Configuration Manager/\1=Window Manager/
 a
 Name[it]=Gestore delle finestre
 .
 wq
 EOS
-
-bak usr/share/applications/tint2.desktop
-run ed usr/share/applications/tint2.desktop <<'EOS'
+  
+  bak usr/share/applications/tint2.desktop
+  run ed usr/share/applications/tint2.desktop <<'EOS'
 a
 NoDisplay=true
 .
 wq
 EOS
-
-run cat \> usr/local/bin/setavatar <<'EOF'
+  
+  run cat \> usr/local/bin/setavatar <<'EOF'
 #!/bin/sh
 # Sets or change LightDM user avatars. See:
 # https://wiki.archlinux.org/index.php/LightDM#Changing_your_avatar
@@ -1513,23 +1496,23 @@ EOS
 
 convert "$2" -resize 96x96 png:/var/lib/AccountsService/icons/$1
 EOF
-run chmod +x usr/local/bin/setavatar
-
-bak etc/profile.d/freetype2.sh
-run ed etc/profile.d/freetype2.sh <<'EOS'
+  run chmod +x usr/local/bin/setavatar
+  
+  bak etc/profile.d/freetype2.sh
+  run ed etc/profile.d/freetype2.sh <<'EOS'
 ,s/^#\(export FREETYPE_PROPERTIES="truetype:interpreter-version\)=40"/\1=38"/
 wq
 EOS
-run ln -sf ../conf.avail/10-sub-pixel-rgb.conf etc/fonts/conf.d/
-run ln -sf ../conf.avail/11-lcdfilter-default.conf etc/fonts/conf.d/
+  run ln -sf ../conf.avail/10-sub-pixel-rgb.conf etc/fonts/conf.d/
+  run ln -sf ../conf.avail/11-lcdfilter-default.conf etc/fonts/conf.d/
 
-bak etc/oblogout.conf
-run ed etc/oblogout.conf <<'EOS'
+  bak etc/oblogout.conf
+  run ed etc/oblogout.conf <<'EOS'
 ,s/^\(lock\) = xtrlock &/\1 = light-locker-command -l/
 wq
 EOS
-
-run cat \>etc/polkit-1/rules.d/00-mount-internal.rules <<'EOS'
+  
+  run cat \>etc/polkit-1/rules.d/00-mount-internal.rules <<'EOS'
 polkit.addRule(function(action, subject) {
    if ((action.id == "org.freedesktop.udisks2.filesystem-mount-system" &&
       subject.local && subject.active && subject.isInGroup("storage")))
@@ -1538,23 +1521,25 @@ polkit.addRule(function(action, subject) {
       }
 });
 EOS
-
-# Copy the .config files added to the skell dir manually
-# since we needed to create the account before their addition
-run cp -R etc/skel/.config/* 'home/$FIRSTUSER/.config/'
-run arch-chroot /mnt <<EOS
+  
+  # Copy the .config files added to the skell dir manually
+  # since we needed to create the account before their addition
+  run cp -R etc/skel/.config/* 'home/$FIRSTUSER/.config/'
+  run arch-chroot /mnt <<EOS
 # Do not forget to fix permissions
 chown -R '$FIRSTUSER:$FIRSTUSER' 'home/$FIRSTUSER/.config/'
 
 x2godbadmin --createdb
 EOS
+  
+  # Generate SSH connection keys for X2go remote support
+  run ssh-keygen -q -t '$KEYTYPE' -C '$KEYCOMMENT' -f '/mnt$KEYFILE' -N "''"
+}
 
-# Generate SSH connection keys for X2go remote support
-run ssh-keygen -q -t '$KEYTYPE' -C '$KEYCOMMENT' -f '/mnt$KEYFILE' -N "''"
-
-msg 'Building additional packages from source code...'
-pacman-cleanup
-run arch-chroot /mnt <<EOS
+function additions {
+  msg 'Building additional packages from source code...'
+  pacman-cleanup
+  run arch-chroot /mnt <<EOS
 mkdir -p /tmp/aur-builds
 cd /tmp/aur-builds
 # Add package names to compile here
@@ -1589,15 +1574,81 @@ EOB
   rm -fr "\$pkg" "\$pkg.tar.gz"
 done
 EOS
-
-run cat \>etc/skel/.tclshrc <<EOS
+  
+  run cat \>etc/skel/.tclshrc <<EOS
 if {$tcl_interactive} {
   package require tclreadline
   ::tclreadline::Loop
 }
 EOS
+  
+  pacman-cleanup
+}
 
-pacman-cleanup
+function clone {
+  msg 'Cloning system...'
+
+  run yes \| pacman -Scc
+  # TODO: clean logs in /var/log
+
+  # TODO: var/tmp gets copied
+  # cp is probably the faster way and easy to use too
+  run cp -a -v /bin /boot /etc /home /lib /lib64 /opt /root /run \
+    /sbin /srv /usr /var .
+
+  run mkdir dev mnt
+  run mkdir -m 1777 tmp
+  run mkdir -m 555 proc sys
+  run touch dev/null
+
+  boot_conf
+  generate_fstab
+}
+
+# Made with figlet
+cat <<'EOS'
+ _____                    _                   _     _                  
+|  ___|_ _ _ __ _ __ ___ | |__   ___  _   _  | |   (_)_ __  _   ___  __
+| |_ / _` | '__| '_ ` _ \| '_ \ / _ \| | | | | |   | | '_ \| | | \ \/ /
+|  _| (_| | |  | | | | | | |_) | (_) | |_| | | |___| | | | | |_| |>  < 
+|_|  \__,_|_|  |_| |_| |_|_.__/ \___/ \__, | |_____|_|_| |_|\__,_/_/\_\
+                                      |___/                            
+EOS
+
+echo 'F A R M B O Y  L I N U X'
+echo 'up to date, fast & clean'
+echo 'GPL (c) Antonio Bonifati'
+
+msg 'Loading configuration...'
+# Remove extension from this script filename (currently none)
+#BASE=${0%.*}
+BASE=$0
+. "$BASE.conf"
+LANGCODE=${LANG%_*}
+
+LOG="$(readlink -f $BASE.log)"
+msg "Logging to $LOG"
+: >"$LOG"
+
+checks
+
+msg "Setting $KEYMAP keyboard..."
+run loadkeys '$KEYMAP'
+
+msg 'Updating system clock...'
+run timedatectl set-ntp true
+
+partition
+
+if [ "$CLONE" = true ]; then
+  clone
+else
+  base_system
+  optionals
+  gui
+  additions
+fi
+
 cd /
 run swapoff /mnt'$SWAPFILE'
 umount -R /mnt
