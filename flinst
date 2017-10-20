@@ -54,8 +54,16 @@ function checks {
     echo 'Sorry, but your system is too old. A 64-bit CPU is needed.'
     exit 1
   fi
+ 
+  if [ "$CLONE" = true ]; then
+    # Use utilities from the clone root, since we cannot install
+    # anything if want the clonation to work offline as well.
+    alias ed="$CLONEROOT"/usr/bin/ed
+    alias dmidecode="$CLONEROOT"/usr/bin/dmidecode
+  else
+    run pacman --noconfirm -Sy ed dmidecode
+  fi
 
-  run pacman --noconfirm -Sy ed dmidecode
   if [ "$VIRTUALBOX_GUEST" = true ]; then
     # TODO: find out a way to get the memory allocated to the VM
     :
@@ -198,15 +206,13 @@ function boot_conf {
   RESUME_OFFSET=$(filefrag -v /mnt$SWAPFILE | awk 'NR == 4 { print $4+0 }')
   PARTUUID=$(blkid -s PARTUUID -o value "$INSTALLDISK$INSTALLPART")
   if [ -z "$EFIPART" ]; then
-    pacman-chroot -Sy intel-ucode grub os-prober
-  
     bak etc/default/grub
     # If we were to use standard device names
     # we would need to escape all / in $INSTALLDISK
     # inside ed with: ${INSTALLDISK//\//\\/}
     run ed etc/default/grub <<EOS
-,s/^\(GRUB_CMDLINE_LINUX_DEFAULT="quiet\)/\1 resume=PARTUUID=$PARTUUID resume_offset=$RESUME_OFFSET/
-,s/^\(GRUB_TIMEOUT=\)5/\1$TIMEOUT/
+,s/^\(GRUB_CMDLINE_LINUX_DEFAULT=\).*/\1"quiet resume=PARTUUID=$PARTUUID resume_offset=$RESUME_OFFSET"/
+,s/^\(GRUB_TIMEOUT=\).*/\1$TIMEOUT/
 wq
 EOS
   fi
@@ -476,7 +482,7 @@ EOS
     git asp yaourt vim alsa-utils unrar timidity++ soundfont-fluid \
     qrencode tlp tlp-rdw ethtool cups foomatic-db foomatic-db-engine \
     foomatic-db-nonfree cups-filters foomatic-db-nonfree-ppds hplip \
-    python-pyqt5 splix rsync dmidecode
+    python-pyqt5 splix rsync dmidecode intel-ucode grub os-prober
   
   bak etc/ssh/sshd_config
   run cat '>>' etc/ssh/sshd_config <<'EOS'
@@ -1602,8 +1608,9 @@ function clone {
 
   # TODO: var/tmp gets copied
   # cp is probably the faster way and easy to use too
-  run cp -a -v /bin /boot /etc /home /lib /lib64 /opt /root /run \
-    /sbin /srv /usr /var .
+  # but also try bsdtar, see:
+  # https://unix.stackexchange.com/questions/66647/faster-alternative-to-cp-a
+  run cp -a "$CLONEROOT"/{bin,boot,etc,home,lib,lib64,opt,root,run,sbin,srv,usr,var} .
 
   run mkdir dev mnt
   run mkdir -m 1777 tmp
