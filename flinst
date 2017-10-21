@@ -1678,26 +1678,3 @@ msg 'Installation ended successfully. Rebooting...'
 echo -e '\07\07\07\07\07'
 
 reboot
-
-# TODO: consider to switch from pcmanfm to spacefm if you want dvd autoplay
-# http://mrbluecoat.blogspot.it/2013/12/auto-play-cds-and-dvds-on-lubuntu-1310.html
-
-# optionals:
-# audacity bc bind-tools bluez bluez-utils celestia chromium dos2unix dropbox elinks
-# geany geany-plugins gnupg google-talkplugin tor-browser-en
-# mlocate networkmanager-openvpn pidgin htop
-# pkgfile rfkill screen sigil simplescreenrecorder skype skype-call-recorder
-# stellarium subdownloader syasokoban teamviewer testdisk tidy whois
-# wine wine-mono wine_gecko winetricks words youtube-dl wget mkvtoolnix-gui
-# mlocate mp3gain mp3info ntfs-3g obexfs pwgen qbittorent musescore soundfont-sgm
-# vkeybd vmpk dosfstools mtools dnsutils elinks lxappearance zsh cdrtools
-
-# php php-apache php-phpdbg phpmyadmin
-
-# optional AUR packages
-# ace-of-penguins asoundconf pepper-flash tpad retropong
-# retrotetris
-
-# TO BACK UP
-#etc/{adjtime,locale.conf,skel/.config/mimeapps.list,NetworkManager/system-connections,X11/xorg.conf.d/{00-keyboard.conf,70-synaptics.conf}}
-

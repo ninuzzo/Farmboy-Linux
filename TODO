@@ -21,6 +21,35 @@ network:/// Browse Network
 (it looks like only read-only sharing works this way)
 
 * Develop a GUI to add and delete users and set the no password
-logins using gtkdialog.
+logins using gtkdialog. There is already a script to set the avatar
+(setavatar)
 
 * obmenu, wait for it to be refined before considering adding it.
+
+* Consider to switch from pcmanfm to spacefm if you want dvd autoplay
+but test memory consuption and other features too, because pcmanfm
+may still be the best all in all.
+http://mrbluecoat.blogspot.it/2013/12/auto-play-cds-and-dvds-on-lubuntu-1310.html
+
+* If LAMP is true, set up php-phpdbg and phpmyadmin along with AMP
+
+* Integrate my utility BAK to back-up the system configuration, see:
+http://ninuzzo.freehostia.com/sw/bak.html
+Some conf file to backup (find more):
+etc/{adjtime,locale.conf,skel/.config/mimeapps.list,NetworkManager/system-connections,X11/xorg.conf.d/{00-keyboard.conf,70-synaptics.conf}}
+
+* Consider these optionals for musicians: audacity mp3gain mp3info vkeybd vmpk 
+
+* Consider these optionals (to categorize):
+bc bind-tools bluez bluez-utils celestia chromium dos2unix dropbox elinks
+geany geany-plugins gnupg google-talkplugin tor-browser-en
+mlocate networkmanager-openvpn pidgin htop
+pkgfile rfkill screen sigil simplescreenrecorder skype skype-call-recorder
+stellarium subdownloader syasokoban teamviewer testdisk tidy whois
+wine wine-mono wine_gecko winetricks words youtube-dl wget mkvtoolnix-gui
+mlocate ntfs-3g obexfs pwgen qbittorent musescore soundfont-sgm
+dosfstools mtools dnsutils elinks lxappearance zsh cdrtools
+
+optional AUR packages
+ace-of-penguins asoundconf pepper-flash tpad retropong
+retrotetris
