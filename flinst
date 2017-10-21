@@ -1672,6 +1672,9 @@ fi
 cd /
 run swapoff /mnt'$SWAPFILE'
 umount -R /mnt
+if [ "$CLONE" = true ]; then
+  umount "$CLONEROOT"
+fi
 msg 'Installation ended successfully. Rebooting...'
 
 # Ring the bell repeatedly so to alert user we are almost done
