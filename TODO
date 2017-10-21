@@ -1,0 +1,26 @@
+* Test https://wiki.archlinux.org/index.php/Dual_boot_with_Windows
+(see UEFI systems). I don't have Windows and couldn't test
+
+* https://wiki.archlinux.org/index.php/Openbox#GUI_configuration
+ob-autostart has a bad interface
+Develop another solution that parses .config/openbox/autostart
+
+* make sure MINGB is correct
+
+* Develop testing tools, e.g. install mesa-demos and launch
+glxinfo | grep "direct rendering"
+to check whether the graphics card is accelerated
+
+* Implement folder sharing. Install and test extra/gnome-user-share or use the
+method outlined here:
+http://wiki.archlinux.org/index.php/Samba#GNOME_Files.2C_Nemo.2C_Caja.2C_Thunar_and_PCManFM
+Note there is no "Browse Network" available in PCManFM. That one is easy to fix:
+Just edit the file leafpad ~/.config/gtk-3.0/bookmarks
+And add the following line to the bottom:
+network:/// Browse Network
+(it looks like only read-only sharing works this way)
+
+* Develop a GUI to add and delete users and set the no password
+logins using gtkdialog.
+
+* obmenu, wait for it to be refined before considering adding it.
