@@ -5,3 +5,9 @@ or make you cut back on hardware.
 
 This installation script will reproduce my exact environment, with all sensible
 configuration defaults and it is meant to be run from the Arch Linux installation CD.
+
+Farmboy-Linux aims to deliver a generic, already well-configure,
+simple, lightweight and secure linux distribution.
+
+I'm looking for contributors and other developers. Feel free to join
+if you like Farmboy Linux.
