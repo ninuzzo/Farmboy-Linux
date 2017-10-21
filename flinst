@@ -258,7 +258,11 @@ EOS
 }
 
 function generate_fstab {
+  # Write comment header
+  run cp etc/fstab.'$BAK' etc/fstab
+  # Add root and swap mount point
   run genfstab -U /mnt '>>' etc/fstab
+  # Optimize
   run ed etc/fstab <<EOS
 ,s/relatime/noatime/g
 wq
