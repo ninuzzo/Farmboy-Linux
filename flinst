@@ -475,12 +475,18 @@ function optionals {
   msg 'Installing optionals (please wait)...'
   pacman-cleanup
   
-  # this rep provides yaourt but also openbox-menu
   bak etc/pacman.conf
   run cat '>>' etc/pacman.conf <<EOS
+
+# this rep provides yaourt but also openbox-menu
 [archlinuxfr]
 SigLevel = Never
 Server = http://repo.archlinux.fr/\$arch
+
+# this provides opera-ffmpeg-codecs
+[herecura]
+# packages built against core
+Server = https://repo.herecura.be/herecura/x86_64
 EOS
   pacman-chroot -Sy crda openssh ed bash-completion zip unzip \
     git asp yaourt vim alsa-utils unrar timidity++ soundfont-fluid \
@@ -662,7 +668,7 @@ function gui {
     EMAILCLIENT=sylpheed
   else
     EMAILCLIENT=opera
-    pacman-chroot --noconfirm -S pepper-flash
+    pacman-chroot --noconfirm -S pepper-flash opera-ffmpeg-codecs
   fi
   
   if [ "$THEMES" = true ]; then
@@ -1572,12 +1578,6 @@ if [ "$TOR" = true ]; then
   # unfortunately localized versions are often old
   pkgs+=(tor-browser-en)
   su - '$FIRSTUSER' -c 'gpg --keyserver pool.sks-keyservers.net --recv-keys D1483FA6C3C07136'
-fi
-if [ "$BROWSER" = opera ]; then
-  pkgs+=(pepper-flash opera-ffmpeg-codecs)
-  # opera-ffmpeg-codecs requires a lot of space in /tmp
-  # (2GB are not enough), so build in other directory
-  bigpkgs+=(opera-ffmpeg-codecs)
 fi
 
 for pkg in "\${pkgs[@]}"; do
