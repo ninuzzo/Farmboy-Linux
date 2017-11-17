@@ -1560,19 +1560,34 @@ function additions {
   pacman-cleanup
   run arch-chroot /mnt <<EOS
 mkdir -p /tmp/aur-builds
-cd /tmp/aur-builds
+
+mkdir -p '/home/$FIRSTUSER/big-aur-builds'
+chown -R '$FIRSTUSER' '/home/$FIRSTUSER/big-aur-builds'
+
 # Add package names to compile here
 pkgs=(ttf-ms-fonts asoundconf soundfont-sgm tclreadline glabels-light pamac-aur gsfonts-type1)
+# also add here those packages who could be too big to be build in memory tmpfs
+bigpkgs=()
 if [ "$TOR" = true ]; then
   # unfortunately localized versions are often old
   pkgs+=(tor-browser-en)
   su - '$FIRSTUSER' -c 'gpg --keyserver pool.sks-keyservers.net --recv-keys D1483FA6C3C07136'
 fi
 if [ "$BROWSER" = opera ]; then
-  pkgs+=(pepper-flash)
+  pkgs+=(pepper-flash opera-ffmpeg-codecs)
+  # opera-ffmpeg-codecs requires a lot of space in /tmp
+  # (2GB are not enough), so build in other directory
+  bigpkgs+=(opera-ffmpeg-codecs)
 fi
 
 for pkg in "\${pkgs[@]}"; do
+  [[ " \${bigpkgs[*]} " == *" \$pkg "* ]] ; BIGPKG=\$?
+  if [ "\$BIGPKG" -eq 0 ]; then
+    cd '/home/$FIRSTUSER/big-aur-builds'
+  else
+    cd /tmp/aur-builds
+  fi
+    
   curl -sLO "https://aur.archlinux.org/cgit/aur.git/snapshot/\$pkg.tar.gz"
   tar zxf "\$pkg.tar.gz"
   chown -R '$FIRSTUSER' "\$pkg"
@@ -1581,15 +1596,19 @@ for pkg in "\${pkgs[@]}"; do
 
   # Build as ordinary user for security
   su - '$FIRSTUSER' <<EOB
-    cd "/tmp/aur-builds/\$pkg"
+    if [ "\$BIGPKG" -eq 0 ]; then
+      cd "/home/$FIRSTUSER/big-aur-builds/\$pkg"
+    else
+      cd "/tmp/aur-builds/\$pkg"
     makepkg -s
 EOB
 
   # Install as root
   pacman --noconfirm -U "\$pkg/\$pkg-${epoch:+$epoch:}\$pkgver-\$pkgrel-"*.pkg.tar.xz
 
-  # Clean up to free disk space right away
-  # although cleaning of /tmp is done by arch-chroot on exit
+  # Clean up to free disk space right away,
+  # although cleaning of /tmp is done by arch-chroot on exit,
+  # but we do not want it to get filled and hang the system.
   rm -fr "\$pkg" "\$pkg.tar.gz"
 done
 EOS
