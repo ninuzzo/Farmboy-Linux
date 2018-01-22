@@ -38,7 +38,7 @@ http://ninuzzo.freehostia.com/sw/bak.html
 Some conf file to backup (find more):
 etc/{adjtime,locale.conf,skel/.config/mimeapps.list,NetworkManager/system-connections,X11/xorg.conf.d/{00-keyboard.conf,70-synaptics.conf}}
 
-* Consider these optionals for musicians: audacity mp3gain mp3info vkeybd vmpk 
+* Consider these optionals for musicians: hydrogen-drumkits audacity-extras mp3gain mp3info vkeybd vmpk
 
 * Consider these optionals (to categorize):
 bc bind-tools bluez bluez-utils celestia chromium dos2unix dropbox elinks

@@ -55,3 +55,9 @@ of this command is as follows:
 
 $ glxinfo | grep "direct rendering"
 direct rendering: Yes
+---
+To see what screen resolution you are using use:
+
+$ xrandr
+
+the preferred mode is marked with a '+', whilst the current one with a '*'

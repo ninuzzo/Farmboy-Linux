@@ -632,6 +632,19 @@ EOS
 #ErrorPolicy stop-printer
 #</Printer>
 #EOS
+
+  if [ "$ADVAUDIO" = true ]; then
+    bak etc/security/limits.conf
+    ed etc/security/limits.conf  <<'EOS'
+/^# End of file/
+-2a
+@audio          -       rtprio          99
+.
+wq
+EOS
+    run gpasswd -Q /mnt -a '$FIRSTUSER' audio
+    pacman-chroot -S audacity hydrogen
+  fi
 }
 
 function gui {
