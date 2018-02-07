@@ -1572,6 +1572,10 @@ EOS
   
   # Generate SSH connection keys for X2go remote support
   run ssh-keygen -q -t '$KEYTYPE' -C '$KEYCOMMENT' -f '/mnt$KEYFILE' -N "''"
+
+  if [ "$ASTRO" = true ]; then
+    pacman-chroot -S stellarium
+  fi
 }
 
 function additions {
