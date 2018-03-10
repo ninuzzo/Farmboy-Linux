@@ -206,6 +206,7 @@ function boot_conf {
   RESUME_OFFSET=$(filefrag -v /mnt$SWAPFILE | awk 'NR == 4 { print $4+0 }')
   PARTUUID=$(blkid -s PARTUUID -o value "$INSTALLDISK$INSTALLPART")
   if [ -z "$EFIPART" ]; then
+    pacman-chroot -S grub os-prober
     bak etc/default/grub
     # If we were to use standard device names
     # we would need to escape all / in $INSTALLDISK
@@ -492,7 +493,7 @@ EOS
     git asp yaourt vim alsa-utils unrar timidity++ soundfont-fluid \
     qrencode tlp tlp-rdw ethtool cups foomatic-db foomatic-db-engine \
     foomatic-db-nonfree cups-filters foomatic-db-nonfree-ppds hplip \
-    python-pyqt5 splix rsync dmidecode intel-ucode grub os-prober
+    python-pyqt5 splix rsync dmidecode intel-ucode
   
   bak etc/ssh/sshd_config
   run cat '>>' etc/ssh/sshd_config <<'EOS'
