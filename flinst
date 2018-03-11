@@ -328,7 +328,7 @@ EOS
   
   bak etc/mkinitcpio.conf
   run ed etc/mkinitcpio.conf <<EOS
-,s/^\(HOOKS="base udev \)/\1resume /
+,s/^\(HOOKS=(base udev \)/\1resume /
 wq
 EOS
   run arch-chroot /mnt <<EOS
@@ -479,7 +479,7 @@ function optionals {
   bak etc/pacman.conf
   run cat '>>' etc/pacman.conf <<EOS
 
-# this rep provides yaourt but also openbox-menu
+# this rep provides yaourt
 [archlinuxfr]
 SigLevel = Never
 Server = http://repo.archlinux.fr/\$arch
@@ -654,18 +654,18 @@ function gui {
   # Note: needed packages should be listed explicitely even if they are
   # dependencies of other packages, so that they won't be removed by a
   # recursive removal of the the latter
-  pacman-chroot -Sy xorg-server xorg-drivers lightdm lightdm-gtk-greeter \
-    ttf-dejavu ttf-ubuntu-font-family artwiz-fonts openbox pcmanfm-gtk3 \
-    lilyterm '$BROWSER' asunder filezilla galculator gimp gmrun gnome-keyring \
-    gnome-mplayer gnumeric guvcview networkmanager network-manager-applet tint2 \
-    usb_modeswitch modemmanager obconf openbox-menu gnome-icon-theme \
-    transmission-gtk xsane viewnior xarchiver xdotool xfce4-notifyd \
-    xpdf gvfs xorg-xhost xorg-xprop imagemagick gnome-alsamixer \
-    volumeicon lxappearance-obconf lxinput xfce4-notes-plugin xorg-xrandr \
-    accountsservice gksu libreoffice-still calibre lxsession-gtk3 \
-    gnome-system-monitor gv gtk3-print-backends oblogout orage xfburn udiskie \
-    light-locker mousepad x2goserver gtkdialog hunspell-en hyphen-en \
-    libmythes mythes-en
+  pacman-chroot -Sy xorg-server xorg-drivers lightdm \
+    lightdm-gtk-greeter ttf-dejavu ttf-ubuntu-font-family artwiz-fonts \
+    openbox pcmanfm-gtk3 lilyterm '$BROWSER' asunder filezilla galculator \
+    gimp gmrun gnome-keyring gnome-mplayer gnumeric guvcview \
+    networkmanager network-manager-applet tint2 usb_modeswitch \
+    modemmanager obconf gnome-icon-theme transmission-gtk xsane viewnior \
+    xarchiver xdotool xfce4-notifyd xpdf gvfs xorg-xhost xorg-xprop \
+    imagemagick gnome-alsamixer volumeicon lxappearance-obconf lxinput \
+    xfce4-notes-plugin xorg-xrandr accountsservice gksu libreoffice-still \
+    calibre lxsession-gtk3 gnome-system-monitor gv gtk3-print-backends \
+    oblogout orage xfburn udiskie light-locker mousepad x2goserver \
+    perl-try-tiny hunspell-en hyphen-en libmythes mythes-en
   
   # TODO: does not work with language variants.
   if [ "$LANGCODE" != en ]; then
@@ -1589,7 +1589,8 @@ mkdir -p '/home/$FIRSTUSER/big-aur-builds'
 chown -R '$FIRSTUSER' '/home/$FIRSTUSER/big-aur-builds'
 
 # Add package names to compile here
-pkgs=(ttf-ms-fonts asoundconf soundfont-sgm tclreadline glabels-light pamac-aur gsfonts-type1)
+pkgs=(ttf-ms-fonts asoundconf soundfont-sgm tclreadline glabels-light \
+  pamac-aur gsfonts-type1 openbox-menu gtkdialog)
 # also add here those packages who could be too big to be build in memory tmpfs
 bigpkgs=()
 if [ "$TOR" = true ]; then
