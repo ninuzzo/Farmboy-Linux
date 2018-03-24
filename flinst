@@ -475,7 +475,7 @@ EOS
 function optionals {
   msg 'Installing optionals (please wait)...'
   pacman-cleanup
-  
+
   bak etc/pacman.conf
   run cat '>>' etc/pacman.conf <<EOS
 
@@ -489,7 +489,7 @@ Server = http://repo.archlinux.fr/\$arch
 # packages built against core
 Server = https://repo.herecura.be/herecura/x86_64
 EOS
-  pacman-chroot -Sy crda openssh ed bash-completion zip unzip \
+  pacman-chroot -Sy crda openssh ed bash-completion zip unzip jack2 \
     git asp yaourt vim alsa-utils unrar timidity++ soundfont-fluid \
     qrencode tlp tlp-rdw ethtool cups foomatic-db foomatic-db-engine \
     foomatic-db-nonfree cups-filters foomatic-db-nonfree-ppds hplip \
@@ -635,16 +635,8 @@ EOS
 #EOS
 
   if [ "$ADVAUDIO" = true ]; then
-    bak etc/security/limits.conf
-    ed etc/security/limits.conf  <<'EOS'
-/^# End of file/
--2a
-@audio          -       rtprio          99
-.
-wq
-EOS
     run gpasswd -Q /mnt -a '$FIRSTUSER' audio
-    pacman-chroot -S audacity hydrogen
+    pacman-chroot -S jack2-dbus
   fi
 }
 
@@ -1576,6 +1568,10 @@ EOS
 
   if [ "$ASTRO" = true ]; then
     pacman-chroot -S stellarium
+  fi
+
+  if [ "$ADVAUDIO" = true ]; then
+    pacman-chroot -S audacity hydrogen cadence
   fi
 }
 
