@@ -470,6 +470,18 @@ EOS
 ,s/^#\(HandlePowerKey\)=poweroff/\1=ignore/
 wq
 EOS
+
+  # Disable coredumps for performance and disk-space savings
+  bak etc/security/limits.conf
+  run ed etc/security/limits.conf <<EOS
+/^# End of file
+i
+# Disable coredumps
+* hard core 0
+
+.
+wq
+EOS
 }
 
 function optionals {
@@ -482,7 +494,7 @@ function optionals {
 # this rep provides yaourt
 [archlinuxfr]
 SigLevel = Never
-Server = http://repo.archlinux.fr/\$arch
+Server = http://repo.archlinux.fr/$arch
 
 # this provides opera-ffmpeg-codecs
 [herecura]
