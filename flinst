@@ -495,11 +495,6 @@ function optionals {
 [archlinuxfr]
 SigLevel = Never
 Server = http://repo.archlinux.fr/$arch
-
-# this provides opera-ffmpeg-codecs
-[herecura]
-# packages built against core
-Server = https://repo.herecura.be/herecura/x86_64
 EOS
   pacman-chroot -Sy crda openssh ed bash-completion zip unzip jack2 \
     git asp yaourt vim alsa-utils unrar timidity++ soundfont-fluid \

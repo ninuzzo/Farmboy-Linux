@@ -61,3 +61,7 @@ To see what screen resolution you are using use:
 $ xrandr
 
 the preferred mode is marked with a '+', whilst the current one with a '*'
+---
+kernel messages can be displayed for inspection after booting by using dmesg or all logs from the current boot with:
+
+$ journalctl -b.
