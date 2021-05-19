@@ -68,7 +68,7 @@ function checks {
     # TODO: find out a way to get the memory allocated to the VM
     :
   else
-    TOTALGB=$(dmidecode --type 17 | awk '/Size:/{ MB += $2 } END { printf "%u\n", MB/1024 }')
+    TOTALGB=$(dmidecode --type 17 | awk '/Size:/{ GB += $2 } END { printf "%u\n", GB }')
   
     if [ "$TOTALGB" -lt "$MINGB" ]; then
       echo "${MINGB}GB of RAM are required, this system only has $TOTALGB. Installation halted!" >&2
