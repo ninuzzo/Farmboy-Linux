@@ -37,7 +37,7 @@ function pacman-cleanup {
 
 # For installations we could use pacstrap, but sometimes we also need removals.
 function pacman-chroot {
-  run pacman -r /mnt --config /mnt/etc/pacman.conf \
+  run pacman -r /mnt --needed --config /mnt/etc/pacman.conf \
     --cachedir /mnt/var/cache/pacman/pkg --hookdir /mnt/etc/pacman.d/hooks \
     --gpgdir /mnt/etc/pacman.d/gnupg --noconfirm "$@"
 }
@@ -195,6 +195,7 @@ EOS
     run mount '$INSTALLDISK$EFIPART' /mnt/boot
   fi
   cd /mnt
+  run mount -t proc /proc proc/
   SWAPFILE="${SWAPFILE#/}"
   run fallocate -l '$(head -n1 /proc/meminfo | awk "{ print \$2 }")K' '$SWAPFILE'
   run chmod 600 '$SWAPFILE'
@@ -272,7 +273,7 @@ EOS
 
 function base_system {
   msg 'Installing the base system (please wait)...'
-  run pacstrap /mnt base base-devel
+  run pacstrap /mnt base base-devel linux-firmware
   
   if [ "$LTSKERNEL" = true ]; then
     pacman-chroot -Sy linux-lts
@@ -500,7 +501,7 @@ EOS
     git asp yaourt vim alsa-utils unrar timidity++ soundfont-fluid \
     qrencode tlp tlp-rdw ethtool cups foomatic-db foomatic-db-engine \
     foomatic-db-nonfree cups-filters foomatic-db-nonfree-ppds hplip \
-    python-pyqt5 splix rsync dmidecode intel-ucode
+    python-pyqt5 splix rsync dmidecode amd-ucode intel-ucode
   
   bak etc/ssh/sshd_config
   run cat '>>' etc/ssh/sshd_config <<'EOS'
@@ -510,7 +511,7 @@ AcceptEnv LANG LC_*
 EOS
   
   run arch-chroot /mnt <<EOS
-systemctl enable tlp tlp-sleep NetworkManager-dispatcher \
+systemctl enable tlp NetworkManager-dispatcher \
   org.cups.cupsd
 systemctl mask systemd-rfkill systemd-rfkill.socket
 EOS
@@ -582,9 +583,8 @@ EOS
     run gpasswd -Q /mnt -a '$FIRSTUSER' vboxsf
   fi
   
-  pacman-chroot -S tlp-rdw
-  bak etc/default/tlp
-  run ed etc/default/tlp <<EOS
+  bak etc/tlp.conf
+  run ed etc/tlp.conf <<EOS
 ,s/^#\(DEVICES_TO_DISABLE_ON_LAN_CONNECT\)/\1/
 ,s/^#\(DEVICES_TO_DISABLE_ON_WIFI_CONNECT\)/\1/
 ,s/^#\(DEVICES_TO_DISABLE_ON_WWAN_CONNECT\)/\1/
@@ -705,7 +705,7 @@ EOS
   
   bak etc/conf.d/wireless-regdom
   run ed etc/conf.d/wireless-regdom <<EOS
-,s/^#\(WIRELESS_REGDOM="IT"\)/\1/
+,s/^#\(WIRELESS_REGDOM="$WIRELESS_REGDOM"\)/\1/
 wq
 EOS
   
@@ -765,9 +765,9 @@ EOS
 wq
 EOS
   
-  bak etc/timidity++/timidity.cfg
+  bak etc/timidity/timidity.cfg
   # Highest-quality soundfonts must come last.
-  run ed etc/timidity++/timidity.cfg << EOS
+  run ed etc/timidity/timidity.cfg << EOS
 ,s/^# \(soundfont \/usr\/share\/soundfonts\/\)DX7Piano.SF2/\1FluidR3_GM.sf2/
 a
 soundfont /usr/share/soundfonts/SGM-V2.01.sf2
@@ -1587,6 +1587,7 @@ function additions {
   pacman-cleanup
   run arch-chroot /mnt <<EOS
 mkdir -p /tmp/aur-builds
+chown -R '$FIRSTUSER' /tmp/aur-builds
 
 mkdir -p '/home/$FIRSTUSER/big-aur-builds'
 chown -R '$FIRSTUSER' '/home/$FIRSTUSER/big-aur-builds'
